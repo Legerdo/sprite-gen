@@ -2,6 +2,10 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## Unreleased (v2.2.1)
+
+- The expired-login prescription for Grok video and images no longer names a bare prompt (`grok -p ok`): on the grok CLI that starts the coding agent in the current directory, which can read, write and spend on its own. The prescription is now a non-agent round-trip (`grok models`) run from an empty directory, with `grok login` as the fallback, and the message says so. A test pins the prescription to a non-agent command.
+
 ## v2.2.0 - Independent asset tools and optional scenes
 
 - Added standalone `background-tile`, `shadow` and `inspect-motion` commands. They accept existing artwork and report tile joins, anchor-preserving shadow projections, repeated poses and explicit foot-contact measurements without changing source animation.

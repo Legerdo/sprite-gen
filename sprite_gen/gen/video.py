@@ -40,7 +40,7 @@ from typing import Any, Callable
 from sprite_gen.spec.runio import atomic_write_text
 from .xai import (
     API_BASE, AUTH_ENV, AUTH_SOURCE_API_KEY, AUTH_SOURCE_GROK_LOGIN,
-    HTTP_TIMEOUT_SECONDS, GROK_REFRESH_COMMAND, GROK_LOGIN_COMMAND,
+    HTTP_TIMEOUT_SECONDS, GROK_REFRESH_COMMAND, GROK_REFRESH_WHERE, GROK_LOGIN_COMMAND,
     Credential, HttpCall, grok_home, resolve_credential, http_json,
 )
 
@@ -205,7 +205,7 @@ def generate_video(
         raise SystemExit(
             f"video: xAI rejected the credential ({credential.source}) with HTTP {status}: {_error_detail(reply)}\n"
             + (
-                f"  the grok login token may have been revoked or rotated — run `{GROK_REFRESH_COMMAND}` or `{GROK_LOGIN_COMMAND}`."
+                f"  the grok login token may have been revoked or rotated — run `{GROK_REFRESH_COMMAND}` {GROK_REFRESH_WHERE} or `{GROK_LOGIN_COMMAND}`."
                 if credential.source == AUTH_SOURCE_GROK_LOGIN
                 else f"  check the {AUTH_ENV} value."
             )

@@ -28,17 +28,27 @@ with both setup paths spelled out.
 
 ### The login token expires — and this tool does not refresh it
 
-The grok CLI stores an OIDC access token that lasts about six hours
-(2026-09-08 measurement: `expires_at` 10:56Z, refreshed to 18:26Z by the next grok
-command). `sprite-gen video` reads `expires_at` **before uploading anything**; if
-it has passed, the run fails with the refresh prescription instead of gambling on
-a 403 mid-upload:
+The grok CLI stores an OIDC access token that lasts about six hours. Any
+long-lived grok session refreshes it proactively about five minutes before
+`expires_at` (2026-09-13 measurement: a resident session rewrote `auth.json` at
+00:15Z for a 00:20Z expiry), so the token only actually expires when no grok
+process has run for hours. `sprite-gen video` reads `expires_at` **before
+uploading anything**; if it has passed, the run fails with the refresh
+prescription instead of gambling on a 403 mid-upload:
 
 ```
 xai: the grok login token expired at 2026-09-08T10:56:34Z (now …); nothing was uploaded.
-  refresh it with any grok CLI command that reaches the API, e.g. `grok -p ok --output-format plain`,
-  or sign in again with `grok login`. This tool never rewrites ~/.grok/auth.json itself.
+  refresh it with `grok models` run from an empty directory (e.g. `cd "$(mktemp -d)"`) — a non-agent round-trip; never a bare prompt like `grok -p …`, which starts the coding agent in your cwd — or sign in again with `grok login`. This tool never rewrites ~/.grok/auth.json itself.
 ```
+
+Why `grok models` and not a prompt: `grok -p ok` is not a ping. It starts the
+coding agent in the current directory, which reads it, may write files and may
+call paid APIs on its own (2026-09-13: run inside a worktree it overwrote a
+script and spent a video generation). `grok models` only runs the CLI's startup
+auth path (`auth: silent refresh` in `~/.grok/logs/unified.jsonl`), prints the
+model list and exits, writing nothing outside `~/.grok`. Run it from an empty
+directory anyway. If it prints a login error instead of the model list, the
+refresh token is gone too: `grok login`.
 
 Why not refresh it here: `auth.json` is the grok CLI's file, the refresh token in
 it may rotate, and a second writer would break the login the user relies on

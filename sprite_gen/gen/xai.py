@@ -22,11 +22,17 @@ AUTH_SOURCE_API_KEY = "XAI_API_KEY"
 AUTH_SOURCE_GROK_LOGIN = "grok-login"
 HTTP_TIMEOUT_SECONDS = 120
 
-# The refresh instruction for an expired login. The grok CLI rewrites the token
-# the next time it talks to the API — measured 2026-09-08 with a one-line prompt
-# (`grok -p ok`): expires_at moved from 10:56Z to 18:26Z. `grok login` is the
-# full re-sign-in for a revoked or missing login.
-GROK_REFRESH_COMMAND = "grok -p ok --output-format plain"
+# The refresh instruction for an expired login. The grok CLI refreshes the token
+# lazily, on its next API round-trip after `expires_at` has passed (2026-09-13
+# measurement: while the token is still valid no command moves expires_at).
+# The command must be a non-agent round-trip: a bare prompt (`grok -p ok`) starts
+# the coding agent, which reads the cwd, may write files and may call paid APIs
+# on its own (2026-09-13 incident, sprite-gen worktree). `grok models` only lists
+# models and exits. Run it from an empty directory anyway so nothing of the
+# user's is in reach. `grok login` is the full re-sign-in for a revoked, missing
+# or non-refreshable login.
+GROK_REFRESH_COMMAND = "grok models"
+GROK_REFRESH_WHERE = "from an empty directory (e.g. `cd \"$(mktemp -d)\"`)"
 GROK_LOGIN_COMMAND = "grok login"
 
 
@@ -86,7 +92,8 @@ def _load_grok_login(auth_path: Path, *, now: datetime) -> Credential:
         if expiry <= now:
             raise SystemExit(
                 f"xai: the grok login token expired at {expires_at} (now {now.isoformat()}); nothing was uploaded.\n"
-                f"  refresh it with any grok CLI command that reaches the API, e.g. `{GROK_REFRESH_COMMAND}`, "
+                f"  refresh it with `{GROK_REFRESH_COMMAND}` run {GROK_REFRESH_WHERE} — a non-agent round-trip; "
+                f"never a bare prompt like `grok -p …`, which starts the coding agent in your cwd — "
                 f"or sign in again with `{GROK_LOGIN_COMMAND}`. This tool never rewrites {auth_path} itself."
             )
     return Credential(token=token, source=AUTH_SOURCE_GROK_LOGIN, expires_at=expires_at if isinstance(expires_at, str) else None)
