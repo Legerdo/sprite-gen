@@ -1,6 +1,6 @@
 # `sprite-gen video` — image to video with your own Grok login (engine SSoT)
 
-> Owns: `sprite-gen video`: image to mp4 through Grok Imagine with the user's own credential · Index: [docs/README.md](README.md)
+> Owns: `sprite-gen video` / `video-extend` / `video-edit`: stills and clips to mp4 through Grok Imagine with the user's own credential · Index: [docs/README.md](README.md)
 
 `sprite-gen video` animates one still into a short mp4 through **Grok Imagine**
 (xAI `POST /v1/videos/generations`). It is the video counterpart of
@@ -8,8 +8,52 @@
 on disk plus a machine-readable report. The sprite-gen skill routes standalone
 video requests here from any agent engine.
 
+The same engine also pins a **last frame**, guides a clip with **reference
+images**, **extends** an existing clip (`video-extend`) and **edits** one with a
+prompt (`video-edit`). The mode table below is the design memo for those modes
+(2026-09-13); the pipeline verbs in [video-pipeline.md](video-pipeline.md)
+(`video-canvas` → `video` → `video-frames` → `video-loop`, `video-set`) keep
+calling `sprite-gen video --image …` exactly as before and know nothing about
+the new modes.
+
 No credential is shipped with this repository. You bring your own, in one of two
 forms, and every run reports which one it used.
+
+## Modes — which flags call what
+
+Measured 2026-09-13 with the subscription login (`grok-login`) and the direct
+REST calls below (vault `projects/sprite-gen/_assets/grok-video-mode-probe-2026-09-13/report.md`);
+limits from docs.x.ai `model-capabilities/video/*` read the same day.
+
+| Verb / flags | Endpoint · model | Body fields | Options allowed | Local pre-checks (before any call) | `mode` |
+|---|---|---|---|---|---|
+| `video --image A` | `POST /v1/videos/generations` · `grok-imagine-video-1.5` (`--model` free) | `image{url}` | duration 1–15, resolution, aspect, audio | still exists; unchanged contract (body snapshot pinned by test) | `image-to-video` |
+| `video --image A --last-frame B` | same · 1.5 only | `image{url}`, `last_frame{url}` | same | both stills exist; classic `grok-imagine-video` rejected | `first-last` |
+| `video --last-frame B` | same · 1.5 only | `last_frame{url}` | same | classic rejected | `last-frame` |
+| `video --reference X [--reference Y …]` (+ optional `--image`) | same · 1.5 only | `reference_images:[{url}…]` (+ `image{url}`) | duration, aspect, audio; resolution **480p/720p only** | 1–7 references; prompt tags `<IMAGE_n>` with `0 ≤ n < count` (0-based); `--resolution 1080p` rejected; classic + `--image` rejected | `reference` |
+| `video-extend --video in.mp4 --duration N` | `POST /v1/videos/extensions` · **`grok-imagine-video` forced** (1.5 answers `400 Video extension is not supported for this model`) | `video{url}`, `duration` | duration 2–10 (extension length only; default 6). No resolution / aspect / model flags: output inherits the input's, capped at 720p | `.mp4` with an `ftyp` box; ffprobe duration 2–15 s | `extend` |
+| `video-edit --video in.mp4` | `POST /v1/videos/edits` · **`grok-imagine-video` forced** (1.5 answers `400 Video editing is not supported for this model`) | `video{url}` | none of duration / resolution / aspect / model: output inherits the input's, capped at 720p | `.mp4` with an `ftyp` box; ffprobe duration ≤ 8.7 s | `edit` |
+
+Invariants:
+
+- **The `--image`-only body is byte-for-byte what it was** (`model`, `prompt`,
+  `duration`, `resolution`, `image.url`, optional `aspect_ratio` /
+  `generate_audio`). A test snapshots it; the pipeline (`video-set` and the
+  four pipeline verbs) is not touched by this work.
+- One of `--image`, `--last-frame`, `--reference` is required; `--image` is no
+  longer required on its own.
+- `<IMAGE_n>` is **0-based**: `<IMAGE_0>` is the first `--reference`. The probe's
+  three-reference run tagged `<IMAGE_0>…<IMAGE_2>` and the clip picked up the
+  third image's scene under `<IMAGE_2>`; the docs' prose says the same
+  ("`<AUDIO_0>` … with `<IMAGE_0>` … when you also pass images") while its code
+  samples write `<IMAGE_1>`. A tag outside `0..count-1`, or any tag with no
+  references, is refused locally.
+- Extension and editing inherit resolution and length from the input and take
+  **no** `--resolution` / `--aspect-ratio` / `--model`; `video-extend` verifies
+  that the returned clip is at least as long as the input (the API returns
+  original + extension as one clip: 15.04 s in → 20.04 s out in the probe).
+- The report (`sprite-gen-video-report`) gains `mode` and `inputs` (local paths
+  by role, never URLs or tokens); every existing field stays.
 
 ## Setup — pick one credential
 
