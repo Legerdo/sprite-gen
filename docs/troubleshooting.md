@@ -71,6 +71,11 @@
   `import sprite_gen.gen.generate_image` 를 실행하는 코드는 같은 덮어쓰기를 일으킨다.
 - **확인**: `pytest tests/packaging tests/gen`, `pytest tests/gen tests/packaging`,
   `pytest tests/` 가 모두 같은 결과여야 한다.
+- **같은 계열(2026-09-13 수리)**: `tests/curate` 가 `tests/frames` 의 헬퍼를 bare 이름
+  (`from test_takes_heal import …`)으로 가져와 `pytest tests/curate` 단독이
+  `ModuleNotFoundError` 였다. 다른 폴더의 테스트 헬퍼는 `tests/` 루트 기준
+  (`from frames.test_takes_heal import …`)으로만 import 한다 — pyproject 의
+  `pythonpath = ["tests"]` 가 그 루트를 보장하고, 폴더 수집 순서는 보장하지 않는다.
 
 ## Related
 
