@@ -243,6 +243,7 @@ class VideoResult:
     mode: str = MODE_IMAGE_TO_VIDEO
     inputs: dict[str, Any] = field(default_factory=dict)  # role -> local path(s); never URLs
     input_duration: float | None = None  # extend / edit: ffprobe seconds of the input clip
+    output_duration: float | None = None  # extend / edit: ffprobe seconds of the published clip
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -262,6 +263,7 @@ class VideoResult:
             "duration_requested": self.duration_requested,
             "duration_reported": self.duration_reported,
             **({"input_duration": self.input_duration} if self.input_duration is not None else {}),
+            **({"output_duration": self.output_duration} if self.output_duration is not None else {}),
             "resolution": self.resolution,
             "aspect_ratio": self.aspect_ratio,
             "generate_audio": self.generate_audio,
@@ -357,12 +359,13 @@ def _submit_poll_publish(
     download: Callable[[str, str], bytes],
     sleep: Callable[[float], None],
     poll_timeout: float | None,
-    accept: Callable[[bytes, dict[str, Any]], None] | None = None,
+    accept: Callable[[Path, dict[str, Any]], None] | None = None,
 ) -> _Published:
     """POST `body` to `endpoint`, poll `/videos/{id}`, download, verify, publish atomically.
 
-    `accept(data, final_poll)` may refuse the clip (raise SystemExit) before anything
-    is written — `video-extend` uses it to verify the returned length."""
+    `accept(staged_path, final_poll)` may refuse the clip (raise SystemExit) while it is
+    still the `.part` file — `video-extend` measures the staged bytes with ffprobe; the
+    staged file is removed and `out` is never written."""
     started = time.monotonic()
     status, reply = call("POST", f"{API_BASE}/videos/{endpoint}", credential.token, body)
     if status in (401, 403):
@@ -410,13 +413,17 @@ def _submit_poll_publish(
         raise SystemExit(f"{verb}: generation {request_id} is done but reported no video url")
     data = download(video_url, credential.token)
     verify_mp4(data)
-    if accept is not None:
-        accept(data, final)
     elapsed = time.monotonic() - started
 
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".part")
     tmp.write_bytes(data)
+    if accept is not None:
+        try:
+            accept(tmp, final)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
     os.replace(tmp, out)
     return _Published(
         data=data, request_id=str(request_id), model=model_reported, duration_reported=duration_reported,
@@ -525,14 +532,17 @@ def extend_video(
         "video": {"url": _data_url(clip)},
     }
 
-    def accept(data: bytes, final: dict[str, Any]) -> None:
-        # The API returns original + extension as one clip; anything shorter than the
-        # input means it did not extend and must not be published as if it had.
-        video = final.get("video") or {}
-        reported = video.get("duration") if isinstance(video, dict) else None
-        if isinstance(reported, (int, float)) and reported + 0.5 < input_seconds:
+    measured: dict[str, float] = {}
+
+    def accept(staged: Path, final: dict[str, Any]) -> None:
+        # The API returns original + extension as one clip, but its poll reports
+        # `video.duration` = the seconds ADDED (5 for a 15.04 s → 20.04 s run, live
+        # 2026-09-13), so the length check measures the bytes, never the status.
+        seconds = probe(staged)
+        measured["output"] = seconds
+        if seconds + EXTEND_INPUT_SLACK_SECONDS < input_seconds:
             raise SystemExit(
-                f"video-extend: the API reported a {reported}s clip for a {input_seconds:.2f}s input — not an extension; nothing was written"
+                f"video-extend: the returned clip is {seconds:.2f}s for a {input_seconds:.2f}s input — not an extension; nothing was written"
             )
 
     published = _submit_poll_publish(
@@ -544,6 +554,7 @@ def extend_video(
         auth_source=credential.source, elapsed_seconds=published.elapsed_seconds, polls=published.polls,
         duration_requested=request.duration, duration_reported=published.duration_reported, host=published.host,
         prompt=request.prompt, mode=MODE_EXTEND, inputs={"video": str(clip)}, input_duration=input_seconds,
+        output_duration=measured.get("output"),
     )
 
 
@@ -587,15 +598,23 @@ def edit_video(
         "prompt": request.prompt,
         "video": {"url": _data_url(clip)},
     }
+    measured: dict[str, float] = {}
+
+    def accept(staged: Path, final: dict[str, Any]) -> None:
+        # No length rule for edits (the API trims the tail: 8.00 s in → 7.71 s out),
+        # but the report says what came back, measured from the bytes.
+        measured["output"] = probe(staged)
+
     published = _submit_poll_publish(
         verb="video-edit", endpoint="edits", body=body, out=out, credential=credential,
-        call=call, download=download, sleep=sleep, poll_timeout=poll_timeout,
+        call=call, download=download, sleep=sleep, poll_timeout=poll_timeout, accept=accept,
     )
     return VideoResult(
         out=out, bytes=len(published.data), model=published.model or request.model, request_id=published.request_id,
         auth_source=credential.source, elapsed_seconds=published.elapsed_seconds, polls=published.polls,
         duration_requested=0, duration_reported=published.duration_reported, host=published.host,
         prompt=request.prompt, mode=MODE_EDIT, inputs={"video": str(clip)}, input_duration=input_seconds,
+        output_duration=measured.get("output"),
     )
 
 

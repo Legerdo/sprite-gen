@@ -186,9 +186,15 @@ def _ext(tmp_path: Path, **overrides) -> video.ExtendRequest:
     return video.ExtendRequest(**kwargs)
 
 
+def _probe(input_seconds: float, output_seconds: float):
+    """ffprobe stand-in: the input clip vs the staged `.part` download."""
+    return lambda clip: output_seconds if clip.name.endswith(".part") else input_seconds
+
+
 def test_extend_posts_classic_model_to_extensions_and_inherits_the_rest(tmp_path: Path) -> None:
-    api = _FakeApi(done={"status": "done", "video": {"url": "https://vidgen.x.ai/v/2.mp4", "duration": 20.04}, "model": "grok-imagine-video"})
-    result = video.extend_video(_ext(tmp_path, duration=5), probe=lambda clip: 15.04, **api.kw())
+    # Live 2026-09-13: the poll's video.duration is the seconds ADDED (5), the bytes are 20.04 s.
+    api = _FakeApi(done={"status": "done", "video": {"url": "https://vidgen.x.ai/v/2.mp4", "duration": 5}, "model": "grok-imagine-video"})
+    result = video.extend_video(_ext(tmp_path, duration=5), probe=_probe(15.04, 20.04), **api.kw())
     assert api.endpoint == f"{video.API_BASE}/videos/extensions"
     assert list(api.body) == ["model", "prompt", "duration", "video"]
     assert api.body["model"] == "grok-imagine-video" and api.body["duration"] == 5
@@ -196,22 +202,24 @@ def test_extend_posts_classic_model_to_extensions_and_inherits_the_rest(tmp_path
     assert "resolution" not in api.body and "aspect_ratio" not in api.body
     payload = result.to_dict()
     assert payload["mode"] == "extend" and payload["inputs"] == {"video": str((tmp_path / "in.mp4").resolve())}
-    assert payload["input_duration"] == 15.04 and payload["duration_reported"] == 20.04 and payload["duration_requested"] == 5
+    assert payload["input_duration"] == 15.04 and payload["output_duration"] == 20.04
+    assert payload["duration_reported"] == 5 and payload["duration_requested"] == 5
     assert result.out.read_bytes() == MP4
 
 
 def test_extend_accepts_the_frame_padded_fifteen_second_clip(tmp_path: Path) -> None:
     # probe m4c: a 15.04 s container went through and came back 20.04 s.
     api = _FakeApi(done={"status": "done", "video": {"url": "https://vidgen.x.ai/v/2.mp4", "duration": 20.04}, "model": "grok-imagine-video"})
-    video.extend_video(_ext(tmp_path, duration=5), probe=lambda clip: 15.04, **api.kw())
+    video.extend_video(_ext(tmp_path, duration=5), probe=_probe(15.04, 20.04), **api.kw())
     assert api.body["duration"] == 5
 
 
-def test_extend_refuses_a_result_shorter_than_the_input(tmp_path: Path) -> None:
-    api = _FakeApi(done={"status": "done", "video": {"url": "https://vidgen.x.ai/v/2.mp4", "duration": 5.0}, "model": "grok-imagine-video"})
+def test_extend_refuses_a_result_shorter_than_the_input_measured_from_bytes(tmp_path: Path) -> None:
+    # The poll claims 17 s; the downloaded bytes are 5 s. Bytes win, nothing is published.
+    api = _FakeApi(done={"status": "done", "video": {"url": "https://vidgen.x.ai/v/2.mp4", "duration": 17.0}, "model": "grok-imagine-video"})
     request = _ext(tmp_path)
-    with pytest.raises(SystemExit, match="not an extension"):
-        video.extend_video(request, probe=lambda clip: 12.0, **api.kw())
+    with pytest.raises(SystemExit, match="returned clip is 5.00s for a 12.00s input — not an extension"):
+        video.extend_video(request, probe=_probe(12.0, 5.0), **api.kw())
     assert not request.out.exists() and not list(tmp_path.glob("*.part"))
 
 
@@ -247,12 +255,12 @@ def _edit(tmp_path: Path, **overrides) -> video.EditRequest:
 
 def test_edit_posts_classic_model_to_edits_without_duration(tmp_path: Path) -> None:
     api = _FakeApi(done={"status": "done", "video": {"url": "https://vidgen.x.ai/v/3.mp4", "duration": 7.71}, "model": "grok-imagine-video"})
-    result = video.edit_video(_edit(tmp_path), probe=lambda clip: 8.0, **api.kw())
+    result = video.edit_video(_edit(tmp_path), probe=_probe(8.0, 7.71), **api.kw())
     assert api.endpoint == f"{video.API_BASE}/videos/edits"
     assert list(api.body) == ["model", "prompt", "video"]
     assert api.body["model"] == "grok-imagine-video"
     payload = result.to_dict()
-    assert payload["mode"] == "edit" and payload["input_duration"] == 8.0 and payload["duration_reported"] == 7.71
+    assert payload["mode"] == "edit" and payload["input_duration"] == 8.0 and payload["output_duration"] == 7.71
     assert payload["inputs"] == {"video": str((tmp_path / "in.mp4").resolve())}
 
 
@@ -347,11 +355,12 @@ def test_run_extend_kwargs_writes_report(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(video, "http_json", api.call)
     monkeypatch.setattr(video, "http_download", api.download)
     monkeypatch.setattr(video.time, "sleep", lambda s: None)
-    monkeypatch.setattr(video, "probe_duration_seconds", lambda clip, *, verb: 6.0)
+    monkeypatch.setattr(video, "probe_duration_seconds", lambda clip, *, verb: 11.0 if clip.name.endswith(".part") else 6.0)
     out, report = tmp_path / "longer.mp4", tmp_path / "longer.report.json"
     rc = video.run_extend(video=_clip(tmp_path), prompt="go on", prompt_file=None, out=out, duration=5, report=report)
     assert rc == 0 and out.read_bytes() == MP4
     payload = json.loads(report.read_text(encoding="utf-8"))
-    assert payload["mode"] == "extend" and payload["model"] == "grok-imagine-video" and payload["input_duration"] == 6.0
+    assert payload["mode"] == "extend" and payload["model"] == "grok-imagine-video"
+    assert payload["input_duration"] == 6.0 and payload["output_duration"] == 11.0
     with pytest.raises(TypeError, match="unexpected keyword"):
         video.run_edit(video=_clip(tmp_path), prompt="p", prompt_file=None, out=out, report=None, duration=5)

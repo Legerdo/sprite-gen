@@ -2,8 +2,12 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
-## Unreleased (v2.2.1)
+## Unreleased (v2.3.0)
 
+- `sprite-gen video` gains the other Grok Imagine generation modes: `--last-frame` pins the closing frame (alone or with `--image`), and `--reference` (repeatable, up to 7) guides the clip with reference images named `<IMAGE_0>`, `<IMAGE_1>`, … in the prompt. `--image` is no longer required on its own. The image-only request body is unchanged and pinned by a snapshot test; the video → loop pipeline (`video-canvas`, `video-frames`, `video-loop`, `video-set`) is untouched.
+- New `video-extend` (`POST /v1/videos/extensions`) continues a 2–15 s clip by 2–10 s and new `video-edit` (`POST /v1/videos/edits`) changes a clip of at most 8.7 s with a prompt. Both force the classic `grok-imagine-video` model (the 1.5 model refuses both endpoints), take no resolution / aspect / model flags because the output inherits the input's, check the input with ffprobe before uploading, and `video-extend` refuses a result shorter than its input.
+- Local pre-checks refuse, before any call: no input at all, more than 7 references, `<IMAGE_n>` tags outside the given references (or with none), 1080p with references, and `last_frame` / `image`+`reference` on the classic model.
+- The `sprite-gen-video-report` carries `mode` (`image-to-video`, `first-last`, `last-frame`, `reference`, `extend`, `edit`), `inputs` (local paths by role) and, for extend / edit, `input_duration`; every existing field stays.
 - The expired-login prescription for Grok video and images no longer names a bare prompt (`grok -p ok`): on the grok CLI that starts the coding agent in the current directory, which can read, write and spend on its own. The prescription is now a non-agent round-trip (`grok models`) run from an empty directory, with `grok login` as the fallback, and the message says so. A test pins the prescription to a non-agent command.
 
 ## v2.2.0 - Independent asset tools and optional scenes
