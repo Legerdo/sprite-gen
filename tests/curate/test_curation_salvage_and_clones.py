@@ -143,7 +143,10 @@ def test_legacy_unstamped_sidecar_drops_all_and_the_save_backs_it_up(fixture_run
 def test_take_append_prefix_rule(tmp_path: Path) -> None:
     """테이크가 뒤에 추가돼도(현재 세그먼트의 접두) 기존 행 큐레이션은 유효하다.
     takes 는 pixel_perfect 계약이므로 pp 런을 test_takes_heal 과 같은 방식으로 만든다."""
-    from test_takes_heal import _build_run, _strip
+    # Imported through the tests/ root (pyproject `pythonpath`), not by bare name: the
+    # bare form only resolves after pytest has collected tests/frames, so
+    # `pytest tests/curate` alone failed with ModuleNotFoundError.
+    from frames.test_takes_heal import _build_run, _strip
 
     run = _build_run(tmp_path)
     _extract(run)
