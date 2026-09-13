@@ -30,7 +30,6 @@ PACKAGE_RUN_MODULES = [
     "extract",
     "gen",
     "gen_set",
-    "generate_image",
     "inspect",
     "prepare",
     "preview",
@@ -63,14 +62,14 @@ def _read_skill_version() -> str:
 def import_probe():
     """Import a module for inspection and leave the process as it was.
 
-    Importing a submodule binds it as an attribute on its parent package. When the
-    submodule shares its name with a function the package already exports
-    (`sprite_gen.gen.generate_image` is a retired shim next to the live
-    `sprite_gen.gen.generate_image()` function), that binding replaces the function
-    for the rest of the session and every later `gen.run()` dies with
-    `'module' object is not callable`. The probe records the parent attribute and the
-    `sys.modules` entry before importing and restores both afterwards, so this test
-    observes the package without rewriting it for tests that run after it.
+    Importing a submodule binds it as an attribute on its parent package. If a
+    submodule ever shares its name with an attribute the package already exports,
+    that binding replaces the attribute for the rest of the session (the retired
+    `sprite_gen.gen.generate_image` shim did exactly that to the live
+    `generate_image()` function until it was removed on 2026-09-13). The probe records
+    the parent attribute and the `sys.modules` entry before importing and restores
+    both afterwards, so this test observes the package without rewriting it for
+    tests that run after it — a general isolation device, not a fix for any one clash.
     """
     restores: list[tuple[object, str, object]] = []
     fresh_modules: list[str] = []

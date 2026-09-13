@@ -55,20 +55,25 @@
   500(`ffmpeg not found`)을 준다. GIF 는 ffmpeg 없이 동작.
 - **대처**: 서버 머신에 ffmpeg 설치 (`brew install ffmpeg` 등).
 
-## 테스트 스위트가 순서에 따라 깨짐 (`pytest tests/packaging tests/gen` 만 빨강)
+## 테스트 스위트가 순서에 따라 깨짐 (`pytest tests/packaging tests/gen` 만 빨강) — 제거됨
 
-- **증상**: `pytest tests/gen` 과 `pytest tests/packaging` 은 각각 초록인데 한 세션에서
+- **상태**: 2026-09-13 원인 제거(플랜 `gen-generate-image-shim-removal`, v2.3.0). 아래는 기록.
+- **증상(과거)**: `pytest tests/gen` 과 `pytest tests/packaging` 은 각각 초록인데 한 세션에서
   packaging → gen 순으로 돌리면 `tests/gen` 이 `TypeError: 'module' object is not
-  callable` 로 수십 건 실패.
-- **원인**: 패키징 import-surface 테스트가 `sprite_gen.gen.generate_image` (은퇴한 shim
-  모듈)를 import 한다. 파이썬은 서브모듈을 import 하면 부모 패키지에 같은 이름의
-  속성으로 바인딩하는데, `sprite_gen.gen` 은 이미 같은 이름의 함수
-  `generate_image()` 를 export 하므로 함수가 모듈로 덮여 세션 끝까지 남는다.
-  `gen.run()` 은 그 이름을 호출하니 이후 gen 테스트 전부가 죽는다.
-- **격리 방식**: `tests/packaging/test_package_surface.py` 의 `import_probe` 픽스처가
-  import 전에 부모 속성과 `sys.modules` 항목을 기록하고 테스트 뒤 되돌린다. 프로덕트
-  코드는 그대로다 — 함수와 shim 모듈의 이름 충돌 자체는 남아 있으니, 런타임에서
-  `import sprite_gen.gen.generate_image` 를 실행하는 코드는 같은 덮어쓰기를 일으킨다.
+  callable` 로 수십 건 실패. 테스트만의 문제가 아니라 런타임에서도
+  `import sprite_gen.gen.generate_image` 한 줄이 같은 죽음을 일으켰다.
+- **원인(과거)**: 은퇴한 shim 모듈 `sprite_gen/gen/generate_image.py` 가 같은 패키지가
+  export 하는 함수 `generate_image()` 와 이름이 같았다. 파이썬은 서브모듈을 import 하면
+  부모 패키지에 같은 이름의 속성으로 바인딩하므로 함수가 모듈로 덮여 세션 끝까지 남고,
+  `gen.run()` 은 그 이름을 호출하니 이후 모든 생성이 죽는다.
+- **수리**: shim 모듈을 삭제했다(개명이 아니라 삭제 — 그 경로를 부르는 CLI 동사·MCP 표면·
+  코드 참조가 0건이라 남길 이름이 없었다). `sprite_gen._modules.MODULE_DOMAIN` 과
+  패키징 import-surface 목록에서도 행을 뺐다. 이제 `sprite_gen.gen.generate_image` 는
+  어떤 import 순서에서도 함수로만 해석되고, 옛 모듈 경로 import 는
+  `ModuleNotFoundError` 로 loud 하게 실패한다. 이미지 생성 진입점은 `sprite_gen.gen`
+  / CLI `sprite-gen gen` 하나다.
+- **잔존 장치**: `tests/packaging/test_package_surface.py` 의 `import_probe` 픽스처는
+  일반 격리 장치로 유지한다(서브모듈 import 가 부모 속성을 덮는 규칙 자체는 남아 있다).
 - **확인**: `pytest tests/packaging tests/gen`, `pytest tests/gen tests/packaging`,
   `pytest tests/` 가 모두 같은 결과여야 한다.
 - **같은 계열(2026-09-13 수리)**: `tests/curate` 가 `tests/frames` 의 헬퍼를 bare 이름

@@ -19,7 +19,6 @@ MODULE_DOMAIN = {
     'layout': 'spec',
     'migrate_request': 'spec',
     'migrate_breathe': 'spec',
-    'generate_image': 'gen',
     'video': 'gen',
     'gen_set': 'gen',
     'canvas': 'video',
