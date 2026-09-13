@@ -308,9 +308,21 @@ COMMANDS: dict[str, tuple[str, Callable[[argparse.ArgumentParser], None], Callab
         gen_set.run,
     ),
     "video": (
-        "Animate one still into a verified mp4 via Grok Imagine (your own grok login or XAI_API_KEY).",
+        "Animate a still (or pin a last frame / guide with references) into a verified mp4 via Grok Imagine (your own grok login or XAI_API_KEY).",
         _add_video,
         video.run,
+    ),
+    # Same declaration-once rule: the module owns the argument surface. Both verbs force
+    # the classic model and inherit resolution/length from the input clip (docs/video.md).
+    "video-extend": (
+        "Continue an existing clip by N seconds via Grok Imagine (POST /v1/videos/extensions).",
+        video.add_extend_arguments,
+        video.run_extend,
+    ),
+    "video-edit": (
+        "Edit an existing clip (≤ 8.7 s) with a prompt via Grok Imagine (POST /v1/videos/edits).",
+        video.add_edit_arguments,
+        video.run_edit,
     ),
     # Video -> sprite pipeline (docs/video-pipeline.md): canvas -> video -> frames -> loop, or video-set for a batch.
     "video-canvas": (
