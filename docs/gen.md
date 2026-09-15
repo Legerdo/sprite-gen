@@ -205,3 +205,16 @@ for tighter prompt adherence.
 ## Related
 
 - [docs/README.md](README.md) — documentation index
+
+## `--trim-alpha` — the bottom edge is the foot line
+
+A generated transparent still carries an unpredictable band of empty alpha under the
+feet and around the sides; two stills placed on the same floor line then stand at
+different heights, and a still swapped for a strip cell (whose feet sit on the cell
+bottom) jumps. `--trim-alpha` (only with `--transparent`) crops the published PNG to the
+bbox of its opaque pixels (alpha ≥ 8) after the transparency step, so the image's bottom
+edge *is* the ground-contact line. The subject is never cut — only fully transparent
+margin goes — and the report records `extra.trim_alpha` with the `bbox`, `before` /
+`after` sizes and the `margin_px` removed on each side. The `.raw.png` beside the output
+is untouched.
+
