@@ -40,6 +40,8 @@ MOTION_TEXT = {
     "run": "moves in place on a treadmill: a fast locomotion cycle for this body type with a bounding rhythm and clear repeating ground contacts.",
     "jump": "performs a modest vertical hop in place over and over: compress, spring up about half the body height, land softly, return to the exact starting stance, repeat at an even rhythm. Same height every time.",
     "attack": "performs the same melee attack over and over: one clean strike in front, then returns to the exact ready stance, repeating at an even rhythm.",
+    "cheer": "celebrates in place: rises into a raised, spread-out cheer pose, holds it for a beat, then settles back to the exact starting stance, repeating at an even rhythm.",
+    "wave": "waves in place: lifts one side into a friendly wave, sways it a few times, then settles back to the exact starting stance, repeating at an even rhythm.",
 }
 COMMON_TEXT = (
     "2D game sprite animation. The character {motion} The character is {view}. Stays centered in the frame and does "
@@ -88,13 +90,15 @@ def run_item(
     force: bool,
     gap: float,
     video_runner: Callable[..., int] = run_video_cli,
+    shape: str | None = None,
+    anchor: str = "none",
 ) -> dict[str, Any]:
     item_dir = root / item
     item_dir.mkdir(parents=True, exist_ok=True)
     result: dict[str, Any] = {"item": item, "direction": direction, "state": state, "dir": str(item_dir)}
     try:
         canvas_png = item_dir / "canvas.png"
-        canvas_report = canvas_mod.run_canvas(base, canvas_png, state=state, shape=None, facing="right" if direction != "left" else "left", headroom=None, lead=None, report_path=item_dir / "canvas.report.json")
+        canvas_report = canvas_mod.run_canvas(base, canvas_png, state=state, shape=shape, facing="right" if direction != "left" else "left", headroom=None, lead=None, report_path=item_dir / "canvas.report.json")
         result["canvas"] = {k: canvas_report[k] for k in ("shape", "canvas", "offset")}
 
         clip = item_dir / "clip.mp4"
@@ -121,8 +125,8 @@ def run_item(
 
         fr = frames_mod.run_frames(clip, item_dir / "frames", key=key, allow_edge_contact=False, report_path=item_dir / "frames.report.json")
         result["frames"] = {k: fr[k] for k in ("fps", "frames", "alpha_zero_pct_min", "alpha_zero_pct_max")}
-        lp = loop_mod.run_loop(Path(fr["keyed_dir"]), item_dir / "loop", fps=float(fr["fps"]), state=state, min_len=None, max_len=None, n_out=None, seam_max=loop_mod.SEAM_RATIO_MAX, name=item, report_path=item_dir / "loop.report.json")
-        result["loop"] = {"kind": lp["cycle"].get("kind", "periodic"), "cycle": lp["cycle"]["length"], "period": lp["cycle"]["period_global"], "cycle_ratio": round(lp["cycle"]["ratio"], 3), "seam_ratio": lp["resampled_seam_ratio"], "n_out": lp["n_out"], "gif": lp["gif"]["file"], "webp": lp["webp"]["file"], "strip": lp["strip"]["path"]}
+        lp = loop_mod.run_loop(Path(fr["keyed_dir"]), item_dir / "loop", fps=float(fr["fps"]), state=state, min_len=None, max_len=None, n_out=None, seam_max=loop_mod.SEAM_RATIO_MAX, name=item, report_path=item_dir / "loop.report.json", anchor=anchor)
+        result["loop"] = {"kind": lp["cycle"].get("kind", "periodic"), "cycle": lp["cycle"]["length"], "period": lp["cycle"]["period_global"], "cycle_ratio": round(lp["cycle"]["ratio"], 3), "seam_ratio": lp["resampled_seam_ratio"], "n_out": lp["n_out"], "drift_px": lp["strip"].get("drift_px", 0), "gif": lp["gif"]["file"], "webp": lp["webp"]["file"], "strip": lp["strip"]["path"]}
         result["ok"] = True
     except SystemExit as exc:
         result["ok"] = False
@@ -156,6 +160,8 @@ def run_set(
     force: bool,
     gap: float,
     video_runner: Callable[..., int] = run_video_cli,
+    shape: str | None = None,
+    anchor: str = "none",
 ) -> dict[str, Any]:
     root = root.expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -165,7 +171,7 @@ def run_set(
     items = [(f"{d}-{s}", d, s) for d in bases for s in states]
     results: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
-        futures = {ex.submit(run_item, item=i, direction=d, state=s, base=bases[d], root=root, character=character, duration=duration, resolution=resolution, key=key, force=force, gap=gap, video_runner=video_runner): i for i, d, s in items}
+        futures = {ex.submit(run_item, item=i, direction=d, state=s, base=bases[d], root=root, character=character, duration=duration, resolution=resolution, key=key, force=force, gap=gap, video_runner=video_runner, shape=shape, anchor=anchor): i for i, d, s in items}
         for fut in as_completed(futures):
             r = fut.result()
             results.append(r)
@@ -200,6 +206,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--key", choices=("auto", "green", "magenta", "white"), default="auto")
     parser.add_argument("--concurrency", type=int, default=3, help="parallel clip generations (starts are staggered regardless)")
     parser.add_argument("--start-gap", type=float, default=START_GAP_SECONDS, help="seconds between clip request starts")
+    parser.add_argument("--shape", choices=canvas_mod.SHAPES, help="force one canvas shape for every state (e.g. wide for a costume or arms that leave a 1:1 frame)")
+    parser.add_argument("--anchor", choices=loop_mod.ANCHOR_MODES, default="none", help="feet: re-centre strip cells on the foot line (undoes in-canvas drift)")
     parser.add_argument("--force", action="store_true", help="regenerate clips that already exist")
 
 
@@ -210,6 +218,7 @@ def run(**kwargs: object) -> int:
         root=Path(str(kwargs["out_dir"])), character=kwargs.get("character"),  # type: ignore[arg-type]
         duration=int(kwargs.get("duration") or 6), resolution=str(kwargs.get("resolution") or "720p"), key=str(kwargs.get("key") or "auto"),
         concurrency=int(kwargs.get("concurrency") or 3), force=bool(kwargs.get("force")), gap=float(kwargs.get("start_gap") or START_GAP_SECONDS),
+        shape=(str(kwargs["shape"]) if kwargs.get("shape") else None), anchor=str(kwargs.get("anchor") or "none"),
     )
     return 0 if not payload["failed"] else 1
 
