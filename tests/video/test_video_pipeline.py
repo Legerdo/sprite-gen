@@ -193,7 +193,10 @@ def test_profiles_scale_windows_with_clip_length() -> None:
 def test_run_loop_emits_strip_gif_webp_and_verifies(tmp_path: Path) -> None:
     files = _gait_frames(tmp_path, period=12, n=96)
     rep = loop_mod.run_loop(tmp_path / "keyed", tmp_path / "out", fps=24.0, state="walk", min_len=None, max_len=None, n_out=8, seam_max=2.0, name="walker", report_path=None)
-    assert rep["cycle"]["period_global"] == 12
+    # 12 frames at 24 fps is half a second — below the walk gait floor (0.6 s), so the
+    # half-period guard doubles it to the two-step 24 and records that it did
+    assert rep["cycle"]["period_global"] == 24
+    assert rep["cycle"]["half_period_guard"]["applied"] is True and rep["cycle"]["half_period_guard"]["from"] == 12
     assert rep["resampled_seam_ratio"] <= 2.0
     strip = Image.open(rep["strip"]["path"])
     assert strip.size == (rep["strip"]["w"] * rep["strip"]["frames"], rep["strip"]["h"])
