@@ -50,6 +50,17 @@ GIF_FRAMES_MIN = 4
 ONE_SHOT_MIN_CONTRAST = 3.0  # one-shot: the excursion peak must stand this far above the rest-pose noise (in MADs)
 ONE_SHOT_PAD = 2  # one-shot: rest frames kept on each side of the excursion so the seam is rest -> rest
 CYCLE_MODES = ("auto", "periodic", "one-shot", "fixed")
+ONE_SHOT_MIN_LEN = 4  # a one-shot's length is the clip's own fact; only a degenerate cut is refused
+# Gait half-period guard. A walk cycle is two steps; when the two halves look alike in
+# pixels (legs hidden by a costume, near/far leg not distinguishable) the half period dips
+# as deep as — or deeper than — the full one, and the "smallest minimum within 15 %"
+# rule picks one step. Pixels cannot settle that case, so a duration prior does: a gait
+# period shorter than the state's floor is treated as one step, and the doubled period is
+# taken when it repeats about as well. The cost is asymmetric — a wrongly doubled cycle
+# is still a clean two-cycle loop, a halved one walks on one leg.
+GAIT_DOUBLE_TOL = 0.25
+ANCHOR_MODES = ("none", "feet")
+FOOT_BAND = 0.08  # fraction of the frame's own height, measured up from its lowest opaque row
 
 
 @dataclass(frozen=True)
@@ -59,13 +70,15 @@ class LoopProfile:
     why: str
     periodic: bool = True  # gate: the profile must show a real period (idle is exempt)
     one_shot_ok: bool = False  # the state is an action that may legitimately happen once (jump, attack) -> one-shot detector may take over
+    gait: bool = False  # locomotion: a period must hold two steps, so the half-period guard applies
+    min_seconds: float = 0.0  # gait floor: a detected period shorter than this is treated as one step
 
 
 # State -> detection window. Fractions of the clip length so 6 s and 10 s clips both work.
 STATE_PROFILES: dict[str, LoopProfile] = {
     "idle": LoopProfile(0.60, 0.95, "breathing is slow and not strictly periodic; the lowest seam is a long window", periodic=False),
-    "walk": LoopProfile(0.06, 0.31, "full gait = two steps; the floor admits a legless body's fast bounce (~13 frames at 24 fps) — the 15% depth rule, not the window, rejects the one-step half period"),
-    "run": LoopProfile(0.07, 0.23, "faster gait"),
+    "walk": LoopProfile(0.06, 0.31, "full gait = two steps; the floor admits a legless body's fast bounce (~13 frames at 24 fps) — the 15% depth rule rejects the one-step half period when the near/far leg shows, and the gait floor (min_seconds) catches it when it does not", gait=True, min_seconds=0.6),
+    "run": LoopProfile(0.07, 0.23, "faster gait", gait=True, min_seconds=0.35),
     "jump": LoopProfile(0.11, 0.45, "crouch-spring-land-return", one_shot_ok=True),
     "attack": LoopProfile(0.11, 0.45, "swing and return to ready", one_shot_ok=True),
     "default": LoopProfile(0.10, 0.45, "generic in-place action", one_shot_ok=True),
@@ -93,8 +106,12 @@ def distance_matrix(files: list[Path]) -> np.ndarray:
     return D
 
 
-def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int) -> dict[str, Any]:
-    """Global period (deepest local minimum of the averaged profile) then the best-seam start."""
+def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int | None = None) -> dict[str, Any]:
+    """Global period (deepest local minimum of the averaged profile) then the best-seam start.
+
+    `gait_floor` (frames) turns on the half-period guard: a period below it is one step
+    of a two-step gait, so the doubled period is taken when it repeats about as well
+    (see GAIT_DOUBLE_TOL)."""
     n = D.shape[0]
     max_len = min(max_len, n - 2)
     if min_len < 2 or max_len < min_len:
@@ -111,6 +128,16 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int) -> dict[str, Any]
     # noticeably less (near/far limb difference) — so a 15% depth tolerance separates both.
     deepest = min(prof[L] for L in cands)
     period = min(L for L in cands if prof[L] <= deepest * 1.15 + 1e-4)  # abs floor: exact repeats sit at ~0
+    guard: dict[str, Any] = {"applied": False}
+    if gait_floor is not None and period < gait_floor:
+        doubles = [L for L in (2 * period - 1, 2 * period, 2 * period + 1) if L in prof and L <= max_len]
+        if doubles:
+            L2 = min(doubles, key=lambda L: prof[L])
+            if prof[L2] <= prof[period] * (1 + GAIT_DOUBLE_TOL) + 1e-4:
+                guard = {"applied": True, "from": period, "to": L2, "gait_floor": gait_floor, "depth_ratio": round(prof[L2] / prof[period], 3) if prof[period] > 0 else None}
+                period = L2
+            else:
+                guard = {"applied": False, "below_floor": period, "gait_floor": gait_floor, "why": "the doubled period repeats too much worse to be the same gait"}
     profile_mean = float(np.mean([prof[L] for L in prof]))
     periodicity = (profile_mean - prof[period]) / profile_mean if profile_mean > 0 else 0.0
     best: dict[str, Any] | None = None
@@ -125,6 +152,7 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int) -> dict[str, Any]
                 best = {"start": i, "length": L, "seam": seam, "inner_mean_adjacent": inner, "ratio": ratio}
     assert best is not None
     best["period_global"] = period
+    best["half_period_guard"] = guard
     best["periodicity"] = round(periodicity, 4)  # how far below the profile mean the period dips (0 = flat = no period)
     best["profile_minima"] = [[L, round(prof[L], 5)] for L in sorted(cands, key=lambda L: prof[L])[:6]]
     return best
@@ -169,10 +197,12 @@ def detect_one_shot(D: np.ndarray, *, min_len: int, max_len: int) -> dict[str, A
     start = max(0, a - ONE_SHOT_PAD)
     end = min(n - 1, b + ONE_SHOT_PAD)
     L = end - start + 1
-    if L < min_len or L > max_len:
+    # The periodic window's lower bound is about repeats; a one-shot has none, so only a
+    # degenerate cut is refused below and only the clip length caps it above.
+    if L < ONE_SHOT_MIN_LEN or L > max_len:
         raise SystemExit(
             f"video-loop: the one-shot excursion spans {L} frames ({a}..{b} + {ONE_SHOT_PAD} rest each side), "
-            f"outside the window [{min_len},{max_len}]; pass --min-len/--max-len if that length is intended"
+            f"outside [{ONE_SHOT_MIN_LEN},{max_len}]; pass --max-len if that length is intended"
         )
     adjacent = np.array([D[i, i + 1] for i in range(start, end)])
     inner = float(adjacent.mean())
@@ -253,7 +283,19 @@ def _scrub(image: Image.Image) -> int:
     return n
 
 
-def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, max_height: int = STRIP_MAX_HEIGHT, max_width: int = STRIP_MAX_WIDTH, cycle_seconds: float, body_height: int | None = None) -> tuple[Image.Image, dict[str, Any]]:
+def foot_centre(image: Image.Image, box: tuple[int, int, int, int]) -> float:
+    """Mean x of the opaque pixels in the lowest FOOT_BAND of the subject's own bbox —
+    the ground-contact line, which is what a placed sprite is judged by."""
+    a = np.asarray(image.getchannel("A"))
+    band = max(1, round((box[3] - box[1]) * FOOT_BAND))
+    rows = a[box[3] - band : box[3], box[0] : box[2]]
+    ys, xs = np.nonzero(rows >= 8)
+    if xs.size == 0:
+        return (box[0] + box[2]) / 2
+    return float(box[0] + xs.mean())
+
+
+def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, max_height: int = STRIP_MAX_HEIGHT, max_width: int = STRIP_MAX_WIDTH, cycle_seconds: float, body_height: int | None = None, anchor: str = "none") -> tuple[Image.Image, dict[str, Any]]:
     """Union-crop (no bottom pad so feet meet the floor), scale, bottom-align, tile horizontally.
 
     The cell count is capped by the strip's PIXEL width (`max_width`) as well as by
@@ -282,14 +324,33 @@ def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, 
     # 300 came out 200 and 300 (measured 2026-09-10). The cap still wins over the target.
     fit = max_height / (bottom - top)
     scale = min(1.0, fit) if body_height is None else min(fit, body_height / body_src)
-    w = round((right - left) * scale)
+    # --anchor feet: the model may have walked the subject across an "in-place" canvas;
+    # a union crop keeps that drift inside every cell. Re-centre each frame on its own
+    # foot line instead, and report how far the feet wandered before alignment.
+    feet = [foot_centre(im, b) for im, b in zip(frames, boxes)] if anchor == "feet" else None
+    drift_px = round(max(feet) - min(feet)) if feet else 0
+    if feet:
+        lead = max(fc - b[0] for fc, b in zip(feet, boxes)) + 8
+        trail = max(b[2] - fc for fc, b in zip(feet, boxes)) + 8
+        cell_src_w = lead + trail
+    else:
+        cell_src_w = right - left
+    w = round(cell_src_w * scale)
     h = round((bottom - top) * scale)
     cap = max(1, min(max_cells, max_width // max(1, w)))
     idx = list(range(L))
     if L > cap:
         idx = [round(k * L / cap) for k in range(cap)]
     chosen = [frames[i] for i in idx]
-    cells = [im.crop((left, top, right, bottom)).resize((w, h), Image.LANCZOS) for im in chosen]
+    if feet:
+        cells = []
+        for i in idx:
+            im = frames[i]
+            cell = Image.new("RGBA", (round(cell_src_w), bottom - top), (0, 0, 0, 0))
+            cell.alpha_composite(im.crop((0, top, im.width, bottom)), (round(lead - feet[i]), 0))
+            cells.append(cell.resize((w, h), Image.LANCZOS))
+    else:
+        cells = [im.crop((left, top, right, bottom)).resize((w, h), Image.LANCZOS) for im in chosen]
     strip = Image.new("RGBA", (w * len(cells), h), (0, 0, 0, 0))
     for k, im in enumerate(cells):
         strip.alpha_composite(im, (k * w, 0))
@@ -305,7 +366,15 @@ def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, 
         "cell_cap": cap,
         "top_margin_px": top,
         "body_height_target": body_height,
+        "foot_anchor": anchor,  # "none" | "feet" — how the cells were aligned
+        "drift_px": drift_px,  # source px the foot line wandered across the cycle (0 when not measured)
+        "foot_x": round(lead * scale) if feet else None,  # x of the foot line inside every cell
     }
+    if feet:
+        # the spec asset loader reads a sidecar `anchor` as the [x, y] pivot (default:
+        # bottom-centre); with feet alignment the true pivot is the foot line at the
+        # cell bottom, so declare it and scenes stand the sprite on its feet
+        meta["anchor"] = [meta["foot_x"], h]
     return strip, meta
 
 
@@ -391,7 +460,10 @@ def run_loop(
     length: int | None = None,
     strip_height: int = STRIP_MAX_HEIGHT,
     body_height: int | None = None,
+    anchor: str = "none",
 ) -> dict[str, Any]:
+    if anchor not in ANCHOR_MODES:
+        raise SystemExit(f"video-loop: unknown --anchor {anchor!r}; expected one of {', '.join(ANCHOR_MODES)}")
     if cycle_mode not in CYCLE_MODES:
         raise SystemExit(f"video-loop: unknown --cycle {cycle_mode!r}; expected one of {', '.join(CYCLE_MODES)}")
     frames_dir = frames_dir.expanduser().resolve()
@@ -411,7 +483,8 @@ def run_loop(
     elif cycle_mode == "one-shot":
         cycle = detect_one_shot(D, min_len=lo, max_len=hi)
     else:
-        cycle = detect_cycle(D, min_len=lo, max_len=hi)
+        gait_floor = round(prof.min_seconds * fps) if prof.gait and prof.min_seconds > 0 else None
+        cycle = detect_cycle(D, min_len=lo, max_len=hi, gait_floor=gait_floor)
         cycle["kind"] = "periodic"
         if prof.periodic and cycle["periodicity"] < PERIODICITY_MIN:
             flat = (
@@ -450,7 +523,7 @@ def run_loop(
         frames.append(im)
 
     cycle_seconds = L / fps
-    strip, strip_meta = build_strip(frames, max_height=strip_height, cycle_seconds=cycle_seconds, body_height=body_height)
+    strip, strip_meta = build_strip(frames, max_height=strip_height, cycle_seconds=cycle_seconds, body_height=body_height, anchor=anchor)
     strip_path = out_dir / f"{name}.strip.png"
     strip.save(strip_path)
     atomic_write_text(out_dir / f"{name}.strip.json", json.dumps(strip_meta, indent=2) + "\n")
@@ -522,6 +595,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--length", type=int, help="fixed cut: cycle length in frames (with --cycle fixed)")
     parser.add_argument("--strip-height", type=int, default=STRIP_MAX_HEIGHT, help=f"cell/strip/GIF height cap in px (default {STRIP_MAX_HEIGHT}); the cycle is scaled down to fit, and never up unless --body-height asks for it")
     parser.add_argument("--body-height", type=int, help="scale so the STANDING height (tallest floor-contact frame) is this many px — the same value across states gives the same character size; --strip-height stays the cap")
+    parser.add_argument("--anchor", choices=ANCHOR_MODES, default="none", help="feet: re-centre every cell on its own foot line (undoes in-canvas drift) and report drift_px")
     parser.add_argument("--name", default="loop", help="basename for strip/gif/webp outputs")
     parser.add_argument("--report", type=Path)
 
@@ -535,6 +609,7 @@ def run(**kwargs: object) -> int:
         cycle_mode=str(kwargs.get("cycle") or "auto"), gif_fps=float(kwargs.get("gif_fps") or GIF_FPS_DEFAULT),
         start=kwargs.get("start"), length=kwargs.get("length"), strip_height=int(kwargs.get("strip_height") or STRIP_MAX_HEIGHT),  # type: ignore[arg-type]
         body_height=kwargs.get("body_height"),  # type: ignore[arg-type]
+        anchor=str(kwargs.get("anchor") or "none"),
     )
     summary = {k: payload[k] for k in ("state", "frames_total", "window", "cycle_seconds", "n_out", "delay_ms", "resampled_seam_ratio", "specks_dropped", "report")}
     summary["cycle"] = {k: payload["cycle"].get(k) for k in ("kind", "start", "length", "period_global", "ratio")}
