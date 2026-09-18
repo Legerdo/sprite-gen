@@ -179,11 +179,12 @@ def test_video_set_passes_shape_and_anchor_through(tmp_path: Path, monkeypatch) 
         Image.new("RGB", (32, 32), (0, 255, 0)).save(out)
         return {"shape": shape or "square", "canvas": [32, 32], "offset": [0, 0]}
 
-    def fake_frames(clip, out_dir, *, key, allow_edge_contact, report_path):
+    def fake_frames(clip, out_dir, *, key, allow_edge_contact, report_path, spill, reference):
+        seen["spill"] = (spill, Path(reference).name)
         keyed = Path(out_dir) / "keyed"
         keyed.mkdir(parents=True, exist_ok=True)
         _symmetric_walker(Path(out_dir), period=12, n=30)
-        return {"fps": 24.0, "frames": 30, "alpha_zero_pct_min": 0.0, "alpha_zero_pct_max": 0.0, "keyed_dir": str(keyed)}
+        return {"fps": 24.0, "frames": 30, "alpha_zero_pct_min": 0.0, "alpha_zero_pct_max": 0.0, "keyed_dir": str(keyed), "spill": {"mode": "full"}}
 
     def fake_loop(frames_dir, out_dir, **kw):
         seen["anchor"] = kw.get("anchor")
@@ -202,7 +203,8 @@ def test_video_set_passes_shape_and_anchor_through(tmp_path: Path, monkeypatch) 
     Image.new("RGB", (32, 32), (0, 255, 0)).save(base)
     payload = batch_mod.run_set(bases={"side": base}, states=["cheer"], root=tmp_path / "set", character=None, duration=6, resolution="720p", key="green", concurrency=1, force=False, gap=0.0, video_runner=fake_video, shape="wide", anchor="feet")
     assert payload["ok"] == 1
-    assert seen == {"shape": "wide", "anchor": "feet"}
+    # the frames step is told to judge spill from the item's own canvas still
+    assert seen == {"shape": "wide", "anchor": "feet", "spill": ("auto", "canvas.png")}
 
 
 def test_cheer_motion_template_names_no_limbs() -> None:

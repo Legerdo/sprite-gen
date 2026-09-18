@@ -126,6 +126,31 @@ touches the edge (a key-tinted blend pixel with low alpha), so a "framed too tig
 message with a small residual count is still a framing problem, not a key problem.
 `--allow-edge-contact` accepts the clipping on purpose.
 
+## 3a. Spill — key colour the model painted into the subject
+
+A video model does not only leave the key around the subject; it paints it *onto* the
+subject — a green sheen across polished metal, a tint on a pale surface. Those pixels are
+opaque, often many pixels in from the edge, and form patches far larger than the chroma
+engine's trapped-spill cap (clusters up to 0.5 % of the subject). The engine leaves a large
+key-tinted patch alone on purpose, because in a still it is usually the subject's own
+key-coloured material. In a clip it usually is not.
+
+The still the clip was made from settles it. `video-frames --spill` takes:
+
+| Mode | What is corrected |
+|---|---|
+| `small` (default) | only small key-tinted clusters — the still pipeline's rule, byte-identical output |
+| `full` | every key-tinted cluster, whatever its size (colour only: alpha is unchanged) |
+| `auto` | keys `--reference` (the still) with the same matte and counts its strongly key-tinted pixels; a share ≤ 0.5 % means the still has no key-coloured material of its own → `full`, otherwise `small` |
+
+`video-set` passes `--spill auto` with each item's `canvas.png` as the reference (override
+with `--spill small|full`), so a green-free character loses the reflections while a
+character that *is* green keeps its colour. The decision and its numbers are recorded in
+the frames report under `spill`. The correction is the engine's own `despill_color` blend
+model (observed = (1−k)·subject + k·key, solved for the subject), so colours without key
+tint are untouched. Faint tints whose cluster never crosses the strong-tint bar are left
+as they are.
+
 ## 3b. Canvas shape for raised limbs and wide costumes
 
 `video-set` picks the canvas from the state row alone. Two things that are not a jump or

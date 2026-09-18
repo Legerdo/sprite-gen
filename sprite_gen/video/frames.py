@@ -36,6 +36,15 @@ from sprite_gen.frames.extract import is_border_key_candidate
 from sprite_gen.spec.runio import atomic_write_text
 
 EDGE_ROWS = 4  # rows/cols inspected at each edge
+# Spill (key colour the video model painted INTO the subject — a reflection on
+# metal, a tint on skin near the edge). The chroma engine treats a large key-tinted
+# cluster as the subject's own key-coloured material and leaves it alone; a video
+# model paints reflections that are exactly that large. The still the clip was made
+# from is the evidence: if the still carries (almost) no key-coloured material, every
+# key tint in the clip was painted by the model and is spill.
+SPILL_MODES = ("auto", "small", "full")
+SPILL_FULL_FRACTION = 1.0  # every tinted cluster is spill, whatever its size
+SPILL_REFERENCE_MAX = 0.005  # the still's own key material ≤ the engine's small-cluster share → full
 EDGE_MAX_PIXELS = 0  # any opaque pixel on the top/left/right edge band = contact
 
 
@@ -115,19 +124,41 @@ def classify_edge_contact(raw: Image.Image, keyed: Image.Image, chroma_key: tupl
     return {"subject": subject, "residual": residual}
 
 
+def decide_spill(reference: Path, key: str) -> dict[str, Any]:
+    """`auto`: key the reference still with the same matte and measure its own
+    key-coloured material. None worth the name → `full`; some → `small`."""
+    from sprite_gen.frames.cutout import KEY_TARGETS, _corner_average, _detect_key_kind, extract_route
+    from sprite_gen.frames.extract import key_material_pixels
+
+    image = Image.open(reference).convert("RGBA")
+    kind = _detect_key_kind(_corner_average(image)) if key == "auto" else key
+    if kind not in ("green", "magenta"):
+        return {"mode": "small", "reference": str(reference), "reason": f"key {kind!r} has no spill pass"}
+    keyed, _ = extract_route(image, kind)
+    material, subject = key_material_pixels(keyed, KEY_TARGETS[kind])
+    share = material / subject if subject else 0.0
+    mode = "full" if share <= SPILL_REFERENCE_MAX else "small"
+    return {"mode": mode, "reference": str(reference), "key": kind, "key_material_px": material,
+            "subject_px": subject, "key_material_share": round(share, 5), "share_max": SPILL_REFERENCE_MAX}
+
+
 def key_frames(
     raw_files: list[Path],
     keyed_dir: Path,
     *,
     key: str = "auto",
     check_edges: bool = True,
+    spill: str = "small",
 ) -> dict[str, Any]:
+    if spill not in ("small", "full"):
+        raise SystemExit(f"video-frames: key_frames takes a resolved spill mode (small|full), got {spill!r}")
+    spill_max = SPILL_FULL_FRACTION if spill == "full" else None
     keyed_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
     contacts: list[dict[str, Any]] = []
     for src in raw_files:
         dst = keyed_dir / src.name
-        stats = cutout(src, dst, key=key)
+        stats = cutout(src, dst, key=key, spill_max_fraction=spill_max)
         image = Image.open(dst).convert("RGBA")
         hist = image.getchannel("A").histogram()
         w, h = image.size
@@ -180,7 +211,11 @@ def _edge_contact_message(contacts: list[dict[str, Any]]) -> str:
     return message
 
 
-def run_frames(clip: Path, out_dir: Path, *, key: str, allow_edge_contact: bool, report_path: Path | None) -> dict[str, Any]:
+def run_frames(clip: Path, out_dir: Path, *, key: str, allow_edge_contact: bool, report_path: Path | None, spill: str = "small", reference: Path | None = None) -> dict[str, Any]:
+    if spill not in SPILL_MODES:
+        raise SystemExit(f"video-frames: unknown --spill {spill!r}; expected one of {', '.join(SPILL_MODES)}")
+    if spill == "auto" and reference is None:
+        raise SystemExit("video-frames: --spill auto needs --reference (the still the clip was made from)")
     clip = clip.expanduser().resolve()
     if not clip.is_file():
         raise SystemExit(f"video-frames: clip not found: {clip}")
@@ -188,9 +223,10 @@ def run_frames(clip: Path, out_dir: Path, *, key: str, allow_edge_contact: bool,
     meta = probe(clip)
     raw_dir = out_dir / "raw"
     keyed_dir = out_dir / "keyed"
+    decision = decide_spill(Path(reference).expanduser().resolve(), key) if spill == "auto" else {"mode": spill, "reason": "explicit"}
     files = extract(clip, raw_dir)
-    report = key_frames(files, keyed_dir, key=key, check_edges=not allow_edge_contact)
-    payload = {"kind": "sprite-gen-video-frames-report", "clip": str(clip), "out_dir": str(out_dir), "raw_dir": str(raw_dir), "keyed_dir": str(keyed_dir), "key": key, **meta, **report}
+    report = key_frames(files, keyed_dir, key=key, check_edges=not allow_edge_contact, spill=decision["mode"])
+    payload = {"kind": "sprite-gen-video-frames-report", "clip": str(clip), "out_dir": str(out_dir), "raw_dir": str(raw_dir), "keyed_dir": str(keyed_dir), "key": key, "spill": decision, **meta, **report}
     target = (report_path or (out_dir / "frames.report.json")).expanduser().resolve()
     atomic_write_text(target, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     payload["report"] = str(target)
@@ -203,12 +239,15 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--key", choices=("auto", "green", "magenta", "white"), default="auto", help="background key (auto reads the corners)")
     parser.add_argument("--allow-edge-contact", action="store_true", help="accept frames whose subject touches the top/left/right edge")
     parser.add_argument("--report", type=Path, help="report JSON (default <out-dir>/frames.report.json)")
+    parser.add_argument("--spill", choices=SPILL_MODES, default="small", help="small: correct only small key-tinted clusters (default); full: every key tint in the subject is spill; auto: decide from --reference")
+    parser.add_argument("--reference", type=Path, help="the still the clip was made from (required by --spill auto)")
 
 
 def run(**kwargs: object) -> int:
     payload = run_frames(Path(str(kwargs["clip"])), Path(str(kwargs["out_dir"])), key=str(kwargs.get("key") or "auto"),
-                         allow_edge_contact=bool(kwargs.get("allow_edge_contact")), report_path=kwargs.get("report"))  # type: ignore[arg-type]
-    summary = {k: payload[k] for k in ("clip", "keyed_dir", "fps", "frames", "alpha_zero_pct_min", "alpha_zero_pct_max", "edge_contacts", "report")}
+                         allow_edge_contact=bool(kwargs.get("allow_edge_contact")), report_path=kwargs.get("report"),  # type: ignore[arg-type]
+                         spill=str(kwargs.get("spill") or "small"), reference=kwargs.get("reference"))  # type: ignore[arg-type]
+    summary = {k: payload[k] for k in ("clip", "keyed_dir", "fps", "frames", "alpha_zero_pct_min", "alpha_zero_pct_max", "edge_contacts", "spill", "report")}
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 

@@ -364,6 +364,19 @@ _IN_BAND_UNMIX_KEY_DEPTH = 2
 _SPILL_MIN_TINT = 40.0
 
 
+def key_material_pixels(image: Image.Image, chroma_key: tuple[int, int, int]) -> tuple[int, int]:
+    """Opaque pixels that are strongly key-tinted (the trapped-spill bar, `_SPILL_MIN_TINT`),
+    and all opaque pixels, of an already keyed RGBA image. A still that has almost none
+    carries no key-coloured material of its own."""
+    keyed_channels, unkeyed_channels = _key_channel_split(chroma_key)
+    data = np.asarray(image.convert("RGBA")).astype(np.int32)
+    opaque = data[..., 3] > 0
+    if not keyed_channels:
+        return 0, int(opaque.sum())
+    tint = _key_tint_field(data[..., :3], keyed_channels, unkeyed_channels)
+    return int((opaque & (tint > _SPILL_MIN_TINT)).sum()), int(opaque.sum())
+
+
 def remove_chroma_background(
     image: Image.Image,
     chroma_key: tuple[int, int, int],
