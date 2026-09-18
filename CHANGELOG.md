@@ -2,6 +2,10 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## Unreleased
+
+- `video-frames --spill small|full|auto` and `video-set --spill` (default `auto`): remove the key colour a video model paints into the subject — a reflection across metal, a tint on a pale surface — which the chroma engine's trapped-spill pass leaves alone once the patch is larger than its small-cluster cap. `auto` keys the still the clip was made from and measures its own key-coloured material; none worth the name means every key tint in the clip is spill (`full`), otherwise the still-pipeline rule stays (`small`). Colour only — alpha is unchanged — and colours without key tint are untouched. `video-frames` defaults to `small`, byte-identical to before; the frames report records the decision under `spill`.
+
 ## v2.3.0 - Grok video modes: first-last, reference, extend, edit
 
 - `sprite-gen video` gains the other Grok Imagine generation modes: `--last-frame` pins the closing frame (alone or with `--image`), and `--reference` (repeatable, up to 7) guides the clip with reference images named `<IMAGE_0>`, `<IMAGE_1>`, … in the prompt. `--image` is no longer required on its own. The image-only request body is unchanged and pinned by a snapshot test; the video → loop pipeline (`video-canvas`, `video-frames`, `video-loop`, `video-set`) is untouched.
