@@ -3,7 +3,7 @@
 * gait half-period guard — a walker whose two half-strides are pixel-identical must
   still come back as a two-step period;
 * one-shot detection is not bound by the periodic window's lower edge;
-* `--anchor feet` re-centres drifting cells and reports the drift;
+* `--anchor feet` removes in-canvas drift (not the step) and reports it;
 * raised-limb states get a wide canvas, and video-set can force shape/anchor.
 """
 from __future__ import annotations
@@ -209,3 +209,65 @@ def test_cheer_motion_template_names_no_limbs() -> None:
     text = batch_mod.MOTION_TEXT["cheer"] + batch_mod.MOTION_TEXT["wave"]
     for limb in ("arm", "leg", "knee", "hand", "foot", "wing"):
         assert limb not in text.lower()
+
+
+def _lifting_walker(tmp_path: Path, *, period: int, n: int, drift_per_frame: float = 0.0, size=(220, 64)) -> list[Path]:
+    """A body that stays put while its legs take turns: each half of the period one leg
+    stands on the floor and the other is lifted clear of the lowest rows. The mean x of
+    the floor band therefore jumps from one foot to the other every step even though the
+    body never moves — the in-place walk a video model actually returns."""
+    d = tmp_path / "keyed"
+    d.mkdir(exist_ok=True)
+    files = []
+    for t in range(n):
+        im = Image.new("RGBA", size, (0, 0, 0, 0))
+        cx = 60 + t * drift_per_frame
+        for y in range(10, 40):
+            for x in range(round(cx) - 6, round(cx) + 6):
+                im.putpixel((x, y), (200, 60, 60, 255))
+        phase = 2 * math.pi * t / period
+        stride = round(14 * math.sin(phase))
+        for sign in (1, -1):
+            leg_x = round(cx + sign * stride)
+            lifted = sign * stride < 0  # the trailing leg is in the air
+            bottom = 50 if lifted else 58
+            for y in range(40, bottom):
+                for x in range(leg_x - 3, leg_x + 3):
+                    if 0 <= x < size[0]:
+                        im.putpixel((x, y), (60, 60, 200, 255))
+        p = d / f"frame-{t:04d}.png"
+        im.save(p)
+        files.append(p)
+    return files
+
+
+def _cell_body_centres(strip: Image.Image, meta: dict) -> list[float]:
+    """x of the body block (the red rows above the legs) inside every cell."""
+    w, h = meta["w"], meta["h"]
+    out = []
+    for k in range(meta["frames"]):
+        cell = np.asarray(strip.crop((k * w, 0, (k + 1) * w, h)))
+        red = (cell[:, :, 0] > 150) & (cell[:, :, 2] < 120) & (cell[:, :, 3] >= 8)
+        out.append(float(np.nonzero(red)[1].mean()))
+    return out
+
+
+def test_feet_anchor_does_not_sway_a_body_that_stands_still(tmp_path: Path) -> None:
+    # The per-frame foot line of an in-place walk jumps between the planted feet; pinning
+    # it made the whole body lurch back and forth by the stride. Only drift is removed.
+    files = _lifting_walker(tmp_path, period=12, n=24)
+    frames = [Image.open(f).convert("RGBA") for f in files]
+    anchored, meta = loop_mod.build_strip(frames, cycle_seconds=1.0, anchor="feet")
+    body = _cell_body_centres(anchored, meta)
+    assert max(body) - min(body) <= 1.5
+    assert meta["drift_px"] <= 2  # nothing moved, nothing was removed
+    assert meta["foot_sway_px"] >= 10  # the planted foot does change — reported, not erased
+
+
+def test_feet_anchor_removes_drift_but_keeps_the_step(tmp_path: Path) -> None:
+    files = _lifting_walker(tmp_path, period=12, n=24, drift_per_frame=1.5)
+    frames = [Image.open(f).convert("RGBA") for f in files]
+    anchored, meta = loop_mod.build_strip(frames, cycle_seconds=1.0, anchor="feet")
+    body = _cell_body_centres(anchored, meta)
+    assert max(body) - min(body) <= 1.5
+    assert 30 <= meta["drift_px"] <= 40  # 23 frames * 1.5 px of authored drift

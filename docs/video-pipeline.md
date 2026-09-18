@@ -251,11 +251,22 @@ set-down, a nod, a flinch come back as the frames they are.
 subject across an in-place canvas, and the union crop that `build_strip` uses keeps that
 drift inside every cell, so a runtime that places the strip by its cell box sees the body
 slide back and forth once per cycle. `--anchor feet` (on `video-loop` and `video-set`)
-measures each cycle frame's foot line — the mean x of the opaque pixels in the lowest
-`FOOT_BAND` (8 %) of that frame's own bbox — and re-centres every cell on it. The strip
-meta gains `foot_anchor`, `drift_px` (how far the foot line wandered across the cycle, in
-source pixels, before alignment) and `foot_x` (the foot column inside every cell), plus the spec loader's `anchor`
-as `[foot_x, h]` so a scene stands the sprite on its foot line; `video-set`'s table row
-carries `drift_px`. The default stays `none`: existing strips do
-not change, and `drift_px` is 0 when it was not measured.
+removes that drift and nothing else. Drift is a slow translation and a gait is periodic,
+so a straight line fitted to the body's centre (the mean x of every opaque pixel) across
+the cycle carries the drift and not the step. Each cell is shifted by that line only,
+so every cell stands on the same **mean** foot line — the mean x of the opaque pixels in
+the lowest `FOOT_BAND` (8 %) of each frame's bbox, averaged over the cycle.
+
+Do not pin each frame's own foot line. In an in-place walk one foot is lifted out of the
+floor band every step, so the per-frame foot line jumps to the planted foot by about the
+stride; pinning it makes a body that stood still lurch back and forth by that much. The
+first version of this option did exactly that, and the synthetic lifting-leg walker in
+`tests/video` pins the rule.
+
+The strip meta gains `foot_anchor`, `drift_px` (the drift removed across the cycle, in
+source pixels), `foot_sway_px` (how far the planted foot moves within the gait — kept, only
+reported) and `foot_x` (the mean foot column inside every cell), plus the spec loader's
+`anchor` as `[foot_x, h]` so a scene stands the sprite on its foot line; `video-set`'s
+table row carries `drift_px`. The default stays `none`: existing strips do not change,
+and `drift_px` / `foot_sway_px` are 0 when they were not measured.
 
