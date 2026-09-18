@@ -92,6 +92,7 @@ def run_item(
     video_runner: Callable[..., int] = run_video_cli,
     shape: str | None = None,
     anchor: str = "none",
+    spill: str = "auto",
 ) -> dict[str, Any]:
     item_dir = root / item
     item_dir.mkdir(parents=True, exist_ok=True)
@@ -123,8 +124,9 @@ def run_item(
             if attempts[-1] != 0 or not clip.exists():
                 raise SystemExit(f"clip generation failed after {len(attempts)} attempt(s); see {item_dir / 'clip.log'}")
 
-        fr = frames_mod.run_frames(clip, item_dir / "frames", key=key, allow_edge_contact=False, report_path=item_dir / "frames.report.json")
+        fr = frames_mod.run_frames(clip, item_dir / "frames", key=key, allow_edge_contact=False, report_path=item_dir / "frames.report.json", spill=spill, reference=canvas_png)
         result["frames"] = {k: fr[k] for k in ("fps", "frames", "alpha_zero_pct_min", "alpha_zero_pct_max")}
+        result["frames"]["spill"] = fr.get("spill", {}).get("mode")
         lp = loop_mod.run_loop(Path(fr["keyed_dir"]), item_dir / "loop", fps=float(fr["fps"]), state=state, min_len=None, max_len=None, n_out=None, seam_max=loop_mod.SEAM_RATIO_MAX, name=item, report_path=item_dir / "loop.report.json", anchor=anchor)
         result["loop"] = {"kind": lp["cycle"].get("kind", "periodic"), "cycle": lp["cycle"]["length"], "period": lp["cycle"]["period_global"], "cycle_ratio": round(lp["cycle"]["ratio"], 3), "seam_ratio": lp["resampled_seam_ratio"], "n_out": lp["n_out"], "drift_px": lp["strip"].get("drift_px", 0), "gif": lp["gif"]["file"], "webp": lp["webp"]["file"], "strip": lp["strip"]["path"]}
         result["ok"] = True
@@ -162,6 +164,7 @@ def run_set(
     video_runner: Callable[..., int] = run_video_cli,
     shape: str | None = None,
     anchor: str = "none",
+    spill: str = "auto",
 ) -> dict[str, Any]:
     root = root.expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -171,7 +174,7 @@ def run_set(
     items = [(f"{d}-{s}", d, s) for d in bases for s in states]
     results: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as ex:
-        futures = {ex.submit(run_item, item=i, direction=d, state=s, base=bases[d], root=root, character=character, duration=duration, resolution=resolution, key=key, force=force, gap=gap, video_runner=video_runner, shape=shape, anchor=anchor): i for i, d, s in items}
+        futures = {ex.submit(run_item, item=i, direction=d, state=s, base=bases[d], root=root, character=character, duration=duration, resolution=resolution, key=key, force=force, gap=gap, video_runner=video_runner, shape=shape, anchor=anchor, spill=spill): i for i, d, s in items}
         for fut in as_completed(futures):
             r = fut.result()
             results.append(r)
@@ -208,6 +211,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--start-gap", type=float, default=START_GAP_SECONDS, help="seconds between clip request starts")
     parser.add_argument("--shape", choices=canvas_mod.SHAPES, help="force one canvas shape for every state (e.g. wide for a costume or arms that leave a 1:1 frame)")
     parser.add_argument("--anchor", choices=loop_mod.ANCHOR_MODES, default="none", help="feet: remove in-canvas drift so every cell stands on the mean foot line")
+    parser.add_argument("--spill", choices=frames_mod.SPILL_MODES, default="auto", help="auto: judge key reflections from each item's canvas still (default); small / full: force")
     parser.add_argument("--force", action="store_true", help="regenerate clips that already exist")
 
 
@@ -218,7 +222,7 @@ def run(**kwargs: object) -> int:
         root=Path(str(kwargs["out_dir"])), character=kwargs.get("character"),  # type: ignore[arg-type]
         duration=int(kwargs.get("duration") or 6), resolution=str(kwargs.get("resolution") or "720p"), key=str(kwargs.get("key") or "auto"),
         concurrency=int(kwargs.get("concurrency") or 3), force=bool(kwargs.get("force")), gap=float(kwargs.get("start_gap") or START_GAP_SECONDS),
-        shape=(str(kwargs["shape"]) if kwargs.get("shape") else None), anchor=str(kwargs.get("anchor") or "none"),
+        shape=(str(kwargs["shape"]) if kwargs.get("shape") else None), anchor=str(kwargs.get("anchor") or "none"), spill=str(kwargs.get("spill") or "auto"),
     )
     return 0 if not payload["failed"] else 1
 
