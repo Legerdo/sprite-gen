@@ -295,6 +295,32 @@ def foot_centre(image: Image.Image, box: tuple[int, int, int, int]) -> float:
     return float(box[0] + xs.mean())
 
 
+def body_centre(image: Image.Image, box: tuple[int, int, int, int]) -> float:
+    """Mean x of every opaque pixel — the whole body's mass, which a gait swings far less
+    than it swings the foot line."""
+    a = np.asarray(image.getchannel("A"))[box[1] : box[3], box[0] : box[2]]
+    xs = np.nonzero(a >= 8)[1]
+    return float(box[0] + xs.mean()) if xs.size else (box[0] + box[2]) / 2
+
+
+def drift_reference(frames: list[Image.Image], boxes: list[tuple[int, int, int, int]]) -> tuple[list[float], float, float]:
+    """Per-frame alignment reference for `--anchor feet`.
+
+    Drift is a slow translation; a gait is periodic. The cycle holds whole periods, so a
+    straight line fitted to the body's centre across it carries the drift and not the
+    step. Only that line is removed: the reference is the mean foot line riding the
+    drift. Pinning each frame's own foot line instead pins the planted foot — which
+    changes every step — and makes a body that stood still lurch by the stride.
+    Returns (reference x per frame, drift removed in px, foot-line sway in px)."""
+    feet = np.array([foot_centre(im, b) for im, b in zip(frames, boxes)])
+    centres = np.array([body_centre(im, b) for im, b in zip(frames, boxes)])
+    t = np.arange(len(frames), dtype=float)
+    slope = float(np.polyfit(t, centres, 1)[0]) if len(frames) > 1 else 0.0
+    trend = slope * t
+    ref = float(np.mean(feet - trend)) + trend
+    return [float(r) for r in ref], abs(slope * (len(frames) - 1)), float(np.ptp(feet - trend))
+
+
 def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, max_height: int = STRIP_MAX_HEIGHT, max_width: int = STRIP_MAX_WIDTH, cycle_seconds: float, body_height: int | None = None, anchor: str = "none") -> tuple[Image.Image, dict[str, Any]]:
     """Union-crop (no bottom pad so feet meet the floor), scale, bottom-align, tile horizontally.
 
@@ -325,10 +351,10 @@ def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, 
     fit = max_height / (bottom - top)
     scale = min(1.0, fit) if body_height is None else min(fit, body_height / body_src)
     # --anchor feet: the model may have walked the subject across an "in-place" canvas;
-    # a union crop keeps that drift inside every cell. Re-centre each frame on its own
-    # foot line instead, and report how far the feet wandered before alignment.
-    feet = [foot_centre(im, b) for im, b in zip(frames, boxes)] if anchor == "feet" else None
-    drift_px = round(max(feet) - min(feet)) if feet else 0
+    # a union crop keeps that drift inside every cell. Remove the drift (see
+    # drift_reference) so every cell stands on the same mean foot line, and report it.
+    feet, drift, sway = drift_reference(frames, boxes) if anchor == "feet" else (None, 0.0, 0.0)
+    drift_px = round(drift)
     if feet:
         lead = max(fc - b[0] for fc, b in zip(feet, boxes)) + 8
         trail = max(b[2] - fc for fc, b in zip(feet, boxes)) + 8
@@ -367,7 +393,8 @@ def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, 
         "top_margin_px": top,
         "body_height_target": body_height,
         "foot_anchor": anchor,  # "none" | "feet" — how the cells were aligned
-        "drift_px": drift_px,  # source px the foot line wandered across the cycle (0 when not measured)
+        "drift_px": drift_px,  # source px of slow in-canvas drift removed across the cycle (0 when not measured)
+        "foot_sway_px": round(sway),  # source px the planted foot moves within the gait, kept as is (0 when not measured)
         "foot_x": round(lead * scale) if feet else None,  # x of the foot line inside every cell
     }
     if feet:
@@ -595,7 +622,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--length", type=int, help="fixed cut: cycle length in frames (with --cycle fixed)")
     parser.add_argument("--strip-height", type=int, default=STRIP_MAX_HEIGHT, help=f"cell/strip/GIF height cap in px (default {STRIP_MAX_HEIGHT}); the cycle is scaled down to fit, and never up unless --body-height asks for it")
     parser.add_argument("--body-height", type=int, help="scale so the STANDING height (tallest floor-contact frame) is this many px — the same value across states gives the same character size; --strip-height stays the cap")
-    parser.add_argument("--anchor", choices=ANCHOR_MODES, default="none", help="feet: re-centre every cell on its own foot line (undoes in-canvas drift) and report drift_px")
+    parser.add_argument("--anchor", choices=ANCHOR_MODES, default="none", help="feet: remove in-canvas drift (a straight-line trend) so every cell stands on the mean foot line; reports drift_px and foot_sway_px")
     parser.add_argument("--name", default="loop", help="basename for strip/gif/webp outputs")
     parser.add_argument("--report", type=Path)
 
