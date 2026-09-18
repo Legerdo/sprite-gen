@@ -57,6 +57,11 @@ STATE_CANVAS: dict[str, CanvasProfile] = {
     "jump": CanvasProfile(SHAPE_TALL, 3 / 4, 0.34, 0.0, "airborne frames need head-room; hair clipped at 1:1"),
     "attack": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.28, "weapon swings and projectiles extend in front"),
     "projectile": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.34, "projectile travels away from the body"),
+    # Raised-limb celebrations leave a square frame at the top corners; wide with a
+    # symmetric margin keeps them inside (lead applies in front, the rest pads the back).
+    "cheer": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.30, "arms raised and spread leave a 1:1 frame"),
+    "wave": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.30, "a raised waving arm leaves a 1:1 frame"),
+    "celebrate": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.30, "same envelope as cheer"),
     "default": CanvasProfile(SHAPE_SQUARE, 1.0, 0.0, 0.0, "in-place motion fits the still's own frame"),
 }
 SHAPE_DEFAULTS: dict[str, CanvasProfile] = {

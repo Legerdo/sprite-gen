@@ -176,6 +176,32 @@ def resolve_default_provider() -> tuple[str, dict[str, str] | None]:
     return default, None
 
 
+def trim_to_alpha(path: Path, *, threshold: int = 8) -> dict[str, Any]:
+    """Crop a transparent PNG in place to the bbox of its opaque pixels.
+
+    A generated still carries an unpredictable band of empty alpha below the feet
+    (and around the sides); two stills placed on the same floor line then stand at
+    different heights. Trimming makes the image's bottom edge the ground-contact
+    line, which is what every placement (scene, strip, runtime) anchors on. The
+    subject is never cut — only fully transparent margin goes."""
+    from PIL import Image
+
+    with Image.open(path) as im:
+        rgba = im.convert("RGBA")
+        before = rgba.size
+        box = rgba.getchannel("A").point(lambda v: 255 if v >= threshold else 0).getbbox()
+        if box is None:
+            raise SystemExit(f"gen: --trim-alpha: {path} is fully transparent; nothing to keep")
+        cropped = rgba.crop(box)
+        cropped.save(path)
+    return {
+        "bbox": list(box),
+        "before": list(before),
+        "after": list(cropped.size),
+        "margin_px": {"left": box[0], "top": box[1], "right": before[0] - box[2], "bottom": before[1] - box[3]},
+    }
+
+
 def generate_image(
     provider: str,
     prompt: str,
@@ -188,6 +214,7 @@ def generate_image(
     alpha_mode: str = ALPHA_MODE_AUTO,
     chroma_key: str = "magenta",
     white_check: Path | None = None,
+    trim_alpha: bool = False,
     keep_session: bool = False,
     workdir: Path | None = None,
 ) -> GenResult:
@@ -253,6 +280,11 @@ def generate_image(
         else:
             shutil.copyfile(raw, out)
         verify_png(out)
+        trim_stats: dict[str, Any] | None = None
+        if trim_alpha:
+            if not transparent:
+                raise SystemExit("gen: --trim-alpha needs --transparent (there is no alpha to trim on an opaque image)")
+            trim_stats = trim_to_alpha(out)
 
         # Preserve the pre-chroma raw next to the destination for auditability.
         raw_keep = out.with_suffix(out.suffix + ".raw.png")
@@ -271,7 +303,7 @@ def generate_image(
             transparent=transparent,
             alpha=alpha_stats,
             chroma=chroma_stats,
-            extra=run.extra,
+            extra={**run.extra, **({"trim_alpha": trim_stats} if trim_stats else {})},
         )
     finally:
         if owns_workdir:
@@ -313,6 +345,7 @@ def _run(args: argparse.Namespace) -> int:
         alpha_mode=args.alpha_mode,
         chroma_key=args.chroma_key,
         white_check=args.white_check,
+        trim_alpha=bool(getattr(args, "trim_alpha", False)),
         keep_session=args.keep_session,
         workdir=args.workdir,
     )
@@ -392,6 +425,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument("--chroma-key", choices=sorted(chroma_mod.KEYS), default="magenta")
+    parser.add_argument("--trim-alpha", action="store_true", help="with --transparent: crop the published PNG to its opaque bbox so the bottom edge is the foot line (margins reported)")
     parser.add_argument("--white-check", type=Path, help="write a white-composite check image")
     parser.add_argument("--keep-session", action="store_true", help="codex: do not delete the rollout jsonl")
     parser.add_argument("--report", type=Path, help="write the generation report JSON here")
