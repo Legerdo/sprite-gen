@@ -126,7 +126,17 @@ touches the edge (a key-tinted blend pixel with low alpha), so a "framed too tig
 message with a small residual count is still a framing problem, not a key problem.
 `--allow-edge-contact` accepts the clipping on purpose.
 
-## 4. Loop — period first, seam second
+## 3b. Canvas shape for raised limbs and wide costumes
+
+`video-set` picks the canvas from the state row alone. Two things that are not a jump or
+an attack still leave a 1:1 frame: limbs raised in a celebration, and a costume that is
+wider than the body (a skirt, a veil, a held object). Both fail `video-frames`'s
+edge-contact check — the clip was made, the frames were cut, and the run stops at the
+gate. The state table now routes `cheer`, `wave` and `celebrate` to the wide canvas, and
+`video-set --shape wide` forces it for every state of a batch when the costume is the
+reason. The same `--shape` is what `video-canvas` already took for a single still.
+
+## 4. Loop — period first, seam second, then the gait floor
 
 The 2026-09-08 lesson: a single-start "most similar later frame" search lands on the
 **1.5-cycle look-alike** of a gait (legs swapped) and produces a loop that hitches at
@@ -225,3 +235,38 @@ the synthetic fixtures under `tests/video/` pin every rule named here.
 ## Related
 
 - [docs/README.md](README.md) — documentation index
+
+### One-shot length is the clip's own fact
+
+The periodic window (`LoopProfile.min_frac` / `max_frac`) bounds *repeats*. A one-shot
+(`--cycle one-shot`, or the `auto` failover for action states) has no repeat to bound:
+the excursion is as long as the model performed it. `detect_one_shot` therefore no longer
+refuses an excursion shorter than the periodic window's lower edge — only a degenerate
+cut under `ONE_SHOT_MIN_LEN` (4 frames) or one longer than the clip is refused. A short
+set-down, a nod, a flinch come back as the frames they are.
+
+### `--anchor feet` — undo in-canvas drift
+
+"Stays centered in the frame" is a request, not a guarantee: the model may walk the
+subject across an in-place canvas, and the union crop that `build_strip` uses keeps that
+drift inside every cell, so a runtime that places the strip by its cell box sees the body
+slide back and forth once per cycle. `--anchor feet` (on `video-loop` and `video-set`)
+removes that drift and nothing else. Drift is a slow translation and a gait is periodic,
+so a straight line fitted to the body's centre (the mean x of every opaque pixel) across
+the cycle carries the drift and not the step. Each cell is shifted by that line only,
+so every cell stands on the same **mean** foot line — the mean x of the opaque pixels in
+the lowest `FOOT_BAND` (8 %) of each frame's bbox, averaged over the cycle.
+
+Do not pin each frame's own foot line. In an in-place walk one foot is lifted out of the
+floor band every step, so the per-frame foot line jumps to the planted foot by about the
+stride; pinning it makes a body that stood still lurch back and forth by that much. The
+first version of this option did exactly that, and the synthetic lifting-leg walker in
+`tests/video` pins the rule.
+
+The strip meta gains `foot_anchor`, `drift_px` (the drift removed across the cycle, in
+source pixels), `foot_sway_px` (how far the planted foot moves within the gait — kept, only
+reported) and `foot_x` (the mean foot column inside every cell), plus the spec loader's
+`anchor` as `[foot_x, h]` so a scene stands the sprite on its foot line; `video-set`'s
+table row carries `drift_px`. The default stays `none`: existing strips do not change,
+and `drift_px` / `foot_sway_px` are 0 when they were not measured.
+

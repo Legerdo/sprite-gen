@@ -2,6 +2,14 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## v2.2.1
+
+- `video-loop` gait half-period guard: a `walk`/`run` period shorter than the state's floor (`LoopProfile.min_seconds`: 0.6 s / 0.35 s) is treated as one step of a two-step gait and doubled when the doubled period repeats within 25 % of it — the case where a costume hides the legs and the half period dips as deep as the full one, which the depth rule alone returned as a one-legged loop. The report carries `cycle.half_period_guard` (`applied`, `from`, `to`, depth ratio, or `below_floor` + why it was left alone). `--min-len` still overrides.
+- `video-loop` one-shot detection no longer refuses an excursion shorter than the periodic window's lower edge; only a cut under 4 frames or longer than the clip is refused. Short performed actions (a set-down, a nod) come back as the frames they are.
+- `video-loop --anchor feet` (also `video-set --anchor`): remove the slow in-canvas drift of a subject the model walked across an "in-place" canvas, so the strip stops sliding once per cycle. A straight line fitted to the body's centre across the cycle carries the drift and not the step; only that line is removed and every cell stands on the mean foot line. Strip meta gains `foot_anchor`, `drift_px` (drift removed), `foot_sway_px` (the planted foot's in-gait movement, kept and reported) and `foot_x`, and declares the spec loader's `anchor` as `[foot_x, h]` so scenes stand the sprite on its feet; the video-set table row carries `drift_px`. Default `none` keeps existing output byte-identical. The first implementation pinned each frame's own foot line instead; in an in-place walk that line jumps to the planted foot every step, so a body that stood still lurched back and forth by the stride. That version never shipped.
+- `video-canvas` / `video-set`: `cheer`, `wave` and `celebrate` now take the wide canvas (raised limbs leave a 1:1 frame at the top corners), `video-set --shape` forces one shape for a whole batch (wide costumes), and `video-set` carries `cheer` / `wave` motion templates that name no limbs.
+- `gen --trim-alpha` (with `--transparent`): crop the published PNG to its opaque bbox so the bottom edge is the foot line; the report records `extra.trim_alpha` (`bbox`, `before`, `after`, `margin_px`). The `.raw.png` is untouched.
+
 ## v2.2.0 - Independent asset tools and optional scenes
 
 - Added standalone `background-tile`, `shadow` and `inspect-motion` commands. They accept existing artwork and report tile joins, anchor-preserving shadow projections, repeated poses and explicit foot-contact measurements without changing source animation.
