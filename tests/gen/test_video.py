@@ -326,3 +326,19 @@ def test_video_uses_subscription_with_api_key_present(tmp_path, monkeypatch, sta
         result = video.generate_video(request, call=api.call, download=api.download, sleep=lambda _: None)
         assert result.auth_source == "grok-login"
     assert all(call[2] == "subscription-token" for call in api.calls)
+
+
+def test_refresh_prescription_is_a_non_agent_command_run_outside_the_repo(tmp_path: Path, monkeypatch) -> None:
+    # 2026-09-13 incident: `grok -p ok` started the coding agent in the worker's cwd,
+    # overwrote a script and spent a paid video call. The prescription must never be
+    # a prompt, and must say where to run it.
+    assert video.GROK_REFRESH_COMMAND == "grok models"
+    assert " -p " not in f" {video.GROK_REFRESH_COMMAND} " and "--single" not in video.GROK_REFRESH_COMMAND
+    assert "empty directory" in video.GROK_REFRESH_WHERE
+    monkeypatch.setenv("GROK_HOME", str(_login_file(tmp_path, expires_at="2026-09-08T10:56:34.899829Z")))
+    with pytest.raises(SystemExit) as excinfo:
+        video.resolve_credential(env={}, now=NOW)
+    message = str(excinfo.value)
+    assert video.GROK_REFRESH_WHERE in message
+    assert "grok -p ok" not in message.replace("`grok -p …`", "")
+    assert "coding agent" in message

@@ -30,7 +30,6 @@ PACKAGE_RUN_MODULES = [
     "extract",
     "gen",
     "gen_set",
-    "generate_image",
     "inspect",
     "prepare",
     "preview",
@@ -59,10 +58,50 @@ def _read_skill_version() -> str:
     return match.group(1)
 
 
+@pytest.fixture
+def import_probe():
+    """Import a module for inspection and leave the process as it was.
+
+    Importing a submodule binds it as an attribute on its parent package. If a
+    submodule ever shares its name with an attribute the package already exports,
+    that binding replaces the attribute for the rest of the session (the retired
+    `sprite_gen.gen.generate_image` shim did exactly that to the live
+    `generate_image()` function until it was removed on 2026-09-13). The probe records
+    the parent attribute and the `sys.modules` entry before importing and restores
+    both afterwards, so this test observes the package without rewriting it for
+    tests that run after it — a general isolation device, not a fix for any one clash.
+    """
+    restores: list[tuple[object, str, object]] = []
+    fresh_modules: list[str] = []
+    missing = object()
+
+    def probe(module_path: str):
+        parent_path, _, child = module_path.rpartition(".")
+        parent = sys.modules.get(parent_path) if parent_path else None
+        was_loaded = module_path in sys.modules
+        if parent is not None:
+            restores.append((parent, child, getattr(parent, child, missing)))
+        module = importlib.import_module(module_path)
+        if not was_loaded:
+            fresh_modules.append(module_path)
+        return module
+
+    yield probe
+
+    for parent, child, prior in reversed(restores):
+        if prior is missing:
+            if hasattr(parent, child):
+                delattr(parent, child)
+        else:
+            setattr(parent, child, prior)
+    for module_path in fresh_modules:
+        sys.modules.pop(module_path, None)
+
+
 @pytest.mark.parametrize("module_name", PACKAGE_RUN_MODULES)
-def test_mcp_import_surface_modules_expose_callable_run(module_name: str) -> None:
+def test_mcp_import_surface_modules_expose_callable_run(module_name: str, import_probe) -> None:
     module_path = "sprite_gen.gen" if module_name == "gen" else qualified(module_name)
-    module = importlib.import_module(module_path)
+    module = import_probe(module_path)
 
     assert callable(getattr(module, "run", None)), f"{module_path}.run must be callable"
 

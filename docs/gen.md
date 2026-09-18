@@ -62,7 +62,7 @@ transport. The user's Grok subscription login (`GROK_HOME` or `~/.grok`) takes
 precedence even when `XAI_API_KEY` is set. Only an absent login file permits the
 API key (console credits); an invalid, expired or rejected login never does. See
 [authentication and expiry](video.md#setup--pick-one-credential)
-for setup. No Grok executable is needed during generation with a valid credential.
+for setup; the video modes (last-frame pin, references, `video-extend`, `video-edit`) are in [video.md](video.md#modes--which-flags-call-what). No Grok executable is needed during generation with a valid credential.
 No agent, credential fallback or automatic retry is started on failure.
 
 New images use `/v1/images/generations`; one reference uses `/v1/images/edits`
