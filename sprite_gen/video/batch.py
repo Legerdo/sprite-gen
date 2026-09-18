@@ -207,7 +207,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--concurrency", type=int, default=3, help="parallel clip generations (starts are staggered regardless)")
     parser.add_argument("--start-gap", type=float, default=START_GAP_SECONDS, help="seconds between clip request starts")
     parser.add_argument("--shape", choices=canvas_mod.SHAPES, help="force one canvas shape for every state (e.g. wide for a costume or arms that leave a 1:1 frame)")
-    parser.add_argument("--anchor", choices=loop_mod.ANCHOR_MODES, default="none", help="feet: re-centre strip cells on the foot line (undoes in-canvas drift)")
+    parser.add_argument("--anchor", choices=loop_mod.ANCHOR_MODES, default="none", help="feet: remove in-canvas drift so every cell stands on the mean foot line")
     parser.add_argument("--force", action="store_true", help="regenerate clips that already exist")
 
 
