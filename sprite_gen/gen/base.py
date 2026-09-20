@@ -40,13 +40,15 @@ TRANSPARENCY_STRATEGIES = (TRANSPARENCY_NATIVE, TRANSPARENCY_CHROMA)
 # quietly downgraded to whatever the backend felt like (No Silent Fallback).
 QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
 
-# Output resolution — the second billed knob, over one shared vocabulary naming
-# the long edge of the published image (`1k` = 1024px). grok Imagine sizes its
-# output this way and prices it together with `quality`; a provider that sizes
-# differently (openai derives a gpt-image `size` from `--aspect-ratio`) refuses
-# the flag rather than accepting money for a resolution it will not deliver.
-# Distinct from the video RESOLUTIONS (`480p`/`720p`/`1080p`), which names a
-# frame height.
+# Output resolution — the second billed knob, over one shared vocabulary of grok
+# Imagine's output-size tiers, which it prices together with `quality`. The names
+# are tiers, not pixel counts: `1.5k` rendered 1408x1408 at 1:1, not 1536
+# (2026-09-20 실측 on the XAI_API_KEY route), so nothing here derives a size from
+# the name — the tier goes to the service verbatim and the service sizes. A
+# provider that sizes differently (openai derives a gpt-image `size` from
+# `--aspect-ratio`) refuses the flag rather than accepting money for a resolution
+# it will not deliver. Distinct from the video RESOLUTIONS
+# (`480p`/`720p`/`1080p`), which names a frame height.
 RESOLUTIONS = ("1k", "1.5k", "2k")
 
 # Child provider processes are independent execution contexts. They must not

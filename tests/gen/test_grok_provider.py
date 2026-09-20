@@ -267,6 +267,11 @@ def test_the_api_key_notice_names_what_the_image_is_priced_on(tmp_path, api, cap
     notice = [line for line in capsys.readouterr().err.splitlines() if "per-call API charge" in line]
     assert len(notice) == 1
     assert "quality=medium" in notice[0] and "resolution=2k" in notice[0]
+    # The shared prefix already denies the subscription once; the grok detail adds
+    # the remedy, not a second denial (2026-09-20 실측 on the live XAI_API_KEY run:
+    # the line read "not a subscription (...), not your Grok subscription — ...").
+    assert notice[0].count("not ") == 1
+    assert "`grok login` signs your Grok subscription in." in notice[0]
 
 
 def test_the_subscription_route_stays_silent_about_billing(tmp_path, api, monkeypatch, capsys):

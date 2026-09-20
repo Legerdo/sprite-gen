@@ -3,8 +3,9 @@
 
 `quality` and `resolution` are the two knobs Imagine prices an image on
 (docs.x.ai, 2026-09-20 확인): quality for grok-imagine-image-2.0 only, resolution
-naming the long edge. Both are sent only when the caller asks for one, so a
-request that names neither stays exactly what it was.
+naming an output-size tier (a tier, not a pixel count — `1.5k` rendered 1408x1408
+at 1:1). Both are sent only when the caller asks for one, so a request that names
+neither stays exactly what it was.
 """
 from __future__ import annotations
 
@@ -133,8 +134,8 @@ class GrokProvider:
                            (("quality", request.quality), ("resolution", request.resolution)) if value)
         if credential.source == xai.AUTH_SOURCE_API_KEY:
             announce_api_billing(self.name, xai.AUTH_ENV,
-                                 f"{f' ({priced})' if priced else ''}, not your Grok subscription — "
-                                 f"`{xai.GROK_LOGIN_COMMAND}` signs that in.")
+                                 f"{f' ({priced})' if priced else ''} — "
+                                 f"`{xai.GROK_LOGIN_COMMAND}` signs your Grok subscription in.")
         started = time.monotonic()
         status, reply = xai.http_json("POST", xai.API_BASE + endpoint, credential.token,
                                       body, timeout=GEN_TIMEOUT_SECONDS)

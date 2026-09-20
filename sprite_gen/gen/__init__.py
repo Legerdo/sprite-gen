@@ -464,10 +464,11 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         choices=RESOLUTIONS,
         default=None,
         help=(
-            "output resolution, as the long edge of the image: grok Imagine's "
-            "1k / 1.5k / 2k, priced together with --quality. Omitted = the provider's "
-            "own default (grok: 1k). openai sizes from --aspect-ratio and codex from "
-            "neither, so both refuse this flag instead of ignoring it"
+            "output size tier, priced together with --quality: grok Imagine's "
+            "1k / 1.5k / 2k (tier names, not pixel counts — 1.5k renders 1408px at 1:1). "
+            "Omitted = the provider's own default (grok: 1k). openai sizes from "
+            "--aspect-ratio and codex from neither, so both refuse this flag "
+            "instead of ignoring it"
         ),
     )
     parser.add_argument(
