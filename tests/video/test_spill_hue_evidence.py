@@ -21,6 +21,8 @@ def _reference(path: Path, key: str, color: tuple[int, int, int], *, fringe=Fals
 @pytest.mark.parametrize('key,color', [
     ('green', (235, 210, 65)),   # yellow: green exceeds the mean, but not red
     ('green', (65, 210, 235)),   # cyan: green exceeds the mean, but not blue
+    ('green', (30, 70, 180)),    # blue material is not green spill
+    ('green', (180, 70, 30)),    # red material is not green spill
     ('magenta', (220, 80, 65)),  # red: red/blue mean is not evidence of magenta
     ('magenta', (65, 80, 220)),  # blue
 ])
@@ -64,3 +66,63 @@ def test_a_bright_thin_green_detail_at_the_outline_is_material(tmp_path):
     ImageDraw.Draw(im).rectangle((24, 24, 135, 135), outline=(160, 180, 165), width=2)
     im.save(source)
     assert frames.decide_spill(source, 'green')['mode'] == 'small'
+
+
+@pytest.mark.parametrize('key,color', [
+    ('green', (72, 230, 80)),
+    ('green', (80, 230, 72)),
+    ('magenta', (220, 80, 212)),
+])
+def test_full_does_not_amplify_colour_noise_into_another_hue(tmp_path, key, color):
+    source = _reference(tmp_path/'ref.png', key, color)
+    frames.key_frames([source], tmp_path/'out', key=key, check_edges=False, spill='full')
+    r, g, b, a = Image.open(tmp_path/'out/ref.png').getpixel((80, 80))
+    assert a == 255
+    # Removing a strong key cast must not magnify a small red/blue difference
+    # into saturated cyan, blue, or orange on otherwise neutral material.
+    assert abs(r-b) <= abs(color[0]-color[2]) + 1
+    assert abs(g-(r+b)/2) <= 1
+    # Merely capping green would leave this pale subject dark.
+    assert (r+g+b)/3 > 2 * min(color)
+
+
+@pytest.mark.parametrize('key,color,expected', [
+    ('green', (80, 165, 80), (120, 120, 120, 255)),
+    ('magenta', (165, 80, 165), (120, 120, 120, 255)),
+])
+def test_full_still_recovers_brightness_from_a_neutral_key_blend(tmp_path, key, color, expected):
+    source = _reference(tmp_path/'ref.png', key, color)
+    frames.key_frames([source], tmp_path/'out', key=key, check_edges=False, spill='full')
+    assert Image.open(tmp_path/'out/ref.png').getpixel((80, 80)) == expected
+
+
+@pytest.mark.parametrize('key,color', [
+    ('green', (70, 210, 150)),
+    ('green', (150, 210, 70)),
+    ('magenta', (210, 70, 150)),
+])
+def test_full_keeps_non_key_colour_differences_instead_of_turning_everything_grey(tmp_path, key, color):
+    source = _reference(tmp_path/'ref.png', key, color)
+    frames.key_frames([source], tmp_path/'out', key=key, check_edges=False, spill='full')
+    r, g, b, a = Image.open(tmp_path/'out/ref.png').getpixel((80, 80))
+    assert a == 255
+    assert abs((r-b)-(color[0]-color[2])) <= 1
+    assert abs(g-(r+b)/2) <= 1
+
+
+@pytest.mark.parametrize('key,painted,color', [
+    ('green', (6, 250, 0), (80, 220, 90)),
+    ('green', (6, 170, 0), (100, 160, 110)),
+    ('magenta', (250, 6, 240), (210, 100, 200)),
+    ('magenta', (220, 40, 150), (180, 140, 170)),
+])
+def test_an_imperfect_painted_key_cannot_introduce_a_secondary_cast(tmp_path, key, painted, color):
+    source = tmp_path/'painted.png'
+    im = Image.new('RGB', (160, 160), painted)
+    ImageDraw.Draw(im).rectangle((24, 24, 135, 135), fill=color)
+    im.save(source)
+    frames.key_frames([source], tmp_path/'out', key=key, check_edges=False, spill='full')
+    r, g, b, a = Image.open(tmp_path/'out/painted.png').getpixel((80, 80))
+    assert a == 255
+    assert abs((r-b)-(color[0]-color[2])) <= 1
+    assert abs(g-(r+b)/2) <= 1

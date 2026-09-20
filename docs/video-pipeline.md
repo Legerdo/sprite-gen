@@ -151,9 +151,16 @@ model (observed = (1−k)·subject + k·key, solved for the subject), so colours
 tint are untouched. `small` keeps the conservative tint threshold of 40; `full` lowers it to 8.
 For `full`, a key hue requires every keyed channel to exceed every non-keyed
 channel: `G − max(R, B)` for green, `min(R, B) − G` for magenta. This same
-excess drives correction strength and the `auto` reference check, so yellow/cyan
+excess selects pixels for correction and drives the `auto` reference check, so yellow/cyan
 are not mistaken for green, or red/blue for magenta. The average-channel tint
 metric remains unchanged in `small` and the edge matte.
+
+The blend fraction still uses the linear average-channel tint, not hue excess.
+Full correction recovers mean brightness but does not amplify colour differences
+within the keyed or non-keyed channel group. Otherwise a small red/blue imbalance
+can become a strong secondary cast when much of the observed colour is key light.
+This is bounded colour recovery, not reconstruction of the original material:
+blue or purple already present without the key hue remains unchanged.
 
 The `auto` reference test discounts dark pixels (all channels below 64) in the
 matte's 4-pixel edge-unmix band. Such contamination along an antialiased outline

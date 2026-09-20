@@ -84,22 +84,37 @@ def despill_color(
     chroma_key: tuple[int, int, int],
     key_tint: float,
     tint: float,
+    *,
+    chroma_groups: tuple[list[int], list[int]] | None = None,
 ) -> tuple[float, tuple[int, int, int]]:
     """Estimate the key fraction of a blend pixel and remove it from the RGB.
 
     Blend model: observed = (1-k)*subject + k*key. key_tint_score is linear in
     the channels and scores the key itself at `key_tint`, so k = tint/key_tint
     recovers a subject estimate whose own tint score is ~0. Returns the
-    subject coverage (1-k) and the despilled color.
+    subject coverage (1-k) and the despilled color. Opaque full-spill correction
+    supplies the declared key's `chroma_groups` to limit chroma gain: recover
+    mean brightness but do not magnify channel differences within either group.
+    Small colour errors otherwise become strong secondary casts when coverage
+    is small. Groups come from the declared key, even if the painted key is dim.
     """
     k = min(tint / key_tint, 1.0)
     coverage = 1.0 - k
     if coverage <= 0:
         return 0.0, (0, 0, 0)
-    red, green, blue = (
-        min(255, max(0, round((color[index] - k * chroma_key[index]) / coverage)))
-        for index in range(3)
-    )
+    unmixed = [(color[index] - k * chroma_key[index]) / coverage for index in range(3)]
+    if chroma_groups is not None:
+        for channels in chroma_groups:
+            if not channels:
+                continue
+            mean = sum(unmixed[index] for index in channels) / len(channels)
+            observed_mean = sum(color[index] for index in channels) / len(channels)
+            for index in channels:
+                # Preserve observed differences, including with a slightly
+                # impure painted key; subtracting its channel imbalance here
+                # would manufacture another cast in otherwise neutral pixels.
+                unmixed[index] = mean + color[index] - observed_mean
+    red, green, blue = (min(255, max(0, round(value))) for value in unmixed)
     return coverage, (red, green, blue)
 
 
@@ -553,8 +568,6 @@ def remove_chroma_background(
         # the image, and a pixel it despilled is no longer a spill candidate.
         spill_field = _key_excess_field if spill_require_hue else _key_tint_field
         current_tint = spill_field(data[..., :3].astype(np.int32), keyed_channels, unkeyed_channels)
-        spill_key_tint = float(spill_field(np.asarray(painted_key, dtype=np.int32),
-                                           keyed_channels, unkeyed_channels))
         # Candidacy and acceptance read the same bar: a cluster can never be accepted
         # below `spill_min_tint`, so admitting only pixels at or above `fringe_delta`
         # would silently keep the lowered bar from reaching anything when it is the
@@ -594,8 +607,15 @@ def remove_chroma_background(
                 y = index // width
                 red, green, blue, alpha = (int(value) for value in data[y, x])
                 color = (red, green, blue)
+                # Hue excess decides *whether* this is spill. It is nonlinear
+                # and cannot estimate a blend fraction: G-max(R,B) drives G
+                # to the larger channel, turning a slight blue bias into cyan.
+                # Use the linear tint axis for unmixing and bound the gain on
+                # the remaining chroma when treating opaque full-spill pixels.
                 coverage, despilled = despill_color(
-                    color, painted_key, spill_key_tint, tints_left[index]
+                    color, painted_key, key_tint,
+                    key_tint_score(color, chroma_key) if spill_require_hue else tints_left[index],
+                    chroma_groups=(keyed_channels, unkeyed_channels) if spill_require_hue else None,
                 )
                 if coverage > 0:
                     data[y, x] = (*despilled, alpha)
