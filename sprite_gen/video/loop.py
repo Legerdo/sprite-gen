@@ -63,22 +63,52 @@ ANCHOR_MODES = ("none", "feet")
 FOOT_BAND = 0.08  # fraction of the frame's own height, measured up from its lowest opaque row
 
 
+# A gait's period is a fact about the body, not about how long the clip runs: the
+# same walker takes the same ~1 s stride in a 3 s clip and a 6 s clip. A window cut
+# from the clip length (the fractions below) shrank with the clip and, at 3 s, put a
+# 1.0-1.3 s stride above the walk ceiling (measured 2026-09-18: one of four walks refused
+# outright, another cut at a half step). Gait states therefore take their window in
+# seconds — physical bounds on how fast and how slow a locomotion cycle can be — capped
+# above by half the clip, the most a detector can *confirm* repeats (a cycle must be seen
+# twice to be a cycle at all). The ceiling is a bound in seconds and not simply "half
+# the clip" because the periodicity gate compares the period's dip with the profile's
+# mean over the whole window: a ceiling that grows with the clip drags in long, sparsely
+# sampled lags, inflates that mean, and let a clip with ONE hop and a jittering stand
+# pass as a walk (measured 2026-09-20 on the one-shot fixture: 0.23 with a half-clip
+# ceiling, 0.03 with 1.6 s). The half-period guard (`min_seconds`) is unchanged.
+
+
 @dataclass(frozen=True)
 class LoopProfile:
-    min_frac: float  # window as a fraction of the clip's frame count
+    min_frac: float  # window as a fraction of the clip's frame count (non-gait states)
     max_frac: float
     why: str
     periodic: bool = True  # gate: the profile must show a real period (idle is exempt)
     one_shot_ok: bool = False  # the state is an action that may legitimately happen once (jump, attack) -> one-shot detector may take over
     gait: bool = False  # locomotion: a period must hold two steps, so the half-period guard applies
     min_seconds: float = 0.0  # gait floor: a detected period shorter than this is treated as one step
+    window_seconds: tuple[float, float] | None = None  # gait states: period bounds in seconds (see above)
+
+    def window(self, n: int, fps: float) -> tuple[int, int]:
+        """Period-length window [lo, hi] in frames for a clip of `n` keyed frames.
+
+        Gait states: `window_seconds`, the ceiling capped at half the clip. Everything
+        else keeps the clip-length fractions (idle wants nearly the whole clip; jump and
+        attack bound repeats only until the one-shot detector takes over)."""
+        if self.window_seconds is not None:
+            lo = max(4, round(self.window_seconds[0] * fps))
+            return lo, max(lo + 2, min(n // 2, round(self.window_seconds[1] * fps)))
+        lo = max(4, round(n * self.min_frac))
+        return lo, max(lo + 2, round(n * self.max_frac))
 
 
-# State -> detection window. Fractions of the clip length so 6 s and 10 s clips both work.
+# State -> detection window. Non-gait profiles are fractions of the clip length so 6 s and
+# 10 s clips both work; gait profiles use `window_seconds` (see above). Walk: measured
+# strides 0.58-1.5 s (2026-09-09..20, seven bodies); run: 0.67-0.8 s.
 STATE_PROFILES: dict[str, LoopProfile] = {
     "idle": LoopProfile(0.60, 0.95, "breathing is slow and not strictly periodic; the lowest seam is a long window", periodic=False),
-    "walk": LoopProfile(0.06, 0.31, "full gait = two steps; the floor admits a legless body's fast bounce (~13 frames at 24 fps) — the 15% depth rule rejects the one-step half period when the near/far leg shows, and the gait floor (min_seconds) catches it when it does not", gait=True, min_seconds=0.6),
-    "run": LoopProfile(0.07, 0.23, "faster gait", gait=True, min_seconds=0.35),
+    "walk": LoopProfile(0.06, 0.31, "full gait = two steps; the floor admits a legless body's fast bounce (~13 frames at 24 fps) — the 15% depth rule rejects the one-step half period when the near/far leg shows, and the gait floor (min_seconds) catches it when it does not", gait=True, min_seconds=0.6, window_seconds=(0.5, 1.6)),
+    "run": LoopProfile(0.07, 0.23, "faster gait", gait=True, min_seconds=0.35, window_seconds=(0.3, 1.2)),
     "jump": LoopProfile(0.11, 0.45, "crouch-spring-land-return", one_shot_ok=True),
     "attack": LoopProfile(0.11, 0.45, "swing and return to ready", one_shot_ok=True),
     "default": LoopProfile(0.10, 0.45, "generic in-place action", one_shot_ok=True),
@@ -321,7 +351,7 @@ def drift_reference(frames: list[Image.Image], boxes: list[tuple[int, int, int, 
     return [float(r) for r in ref], abs(slope * (len(frames) - 1)), float(np.ptp(feet - trend))
 
 
-def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, max_height: int = STRIP_MAX_HEIGHT, max_width: int = STRIP_MAX_WIDTH, cycle_seconds: float, body_height: int | None = None, anchor: str = "none") -> tuple[Image.Image, dict[str, Any]]:
+def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, max_height: int = STRIP_MAX_HEIGHT, max_width: int = STRIP_MAX_WIDTH, cycle_seconds: float, body_height: int | None = None, anchor: str = "none", kind: str = "periodic") -> tuple[Image.Image, dict[str, Any]]:
     """Union-crop (no bottom pad so feet meet the floor), scale, bottom-align, tile horizontally.
 
     The cell count is capped by the strip's PIXEL width (`max_width`) as well as by
@@ -384,6 +414,11 @@ def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, 
         "frames": len(cells),
         "w": w,
         "h": h,
+        # how the cycle was cut, and whether a runtime should repeat it: a one-shot
+        # (rest -> action -> rest) plays once on a trigger; every other cut is a loop.
+        # The spec asset loader reads `loop` from this sidecar.
+        "kind": kind,
+        "loop": kind != "one-shot",
         "body_h": round(body_src * scale),
         "delay_ms": round(1000 * cycle_seconds / len(cells), 2),
         "cycle_frames": L,
@@ -499,8 +534,9 @@ def run_loop(
         raise SystemExit(f"video-loop: need at least 6 keyed frames in {frames_dir}, found {len(files)}")
     prof = profile_for(state)
     n = len(files)
-    lo = min_len if min_len is not None else max(4, round(n * prof.min_frac))
-    hi = max_len if max_len is not None else max(lo + 2, round(n * prof.max_frac))
+    lo_default, hi_default = prof.window(n, fps)
+    lo = min_len if min_len is not None else lo_default
+    hi = max_len if max_len is not None else max(lo + 2, hi_default)
     D = distance_matrix(files)
     periodic_attempt: dict[str, Any] | None = None
     if cycle_mode == "fixed":
@@ -550,7 +586,13 @@ def run_loop(
         frames.append(im)
 
     cycle_seconds = L / fps
-    strip, strip_meta = build_strip(frames, max_height=strip_height, cycle_seconds=cycle_seconds, body_height=body_height, anchor=anchor)
+    strip, strip_meta = build_strip(frames, max_height=strip_height, cycle_seconds=cycle_seconds, body_height=body_height, anchor=anchor, kind=str(cycle.get("kind") or "periodic"))
+    # The GIF/WebP are cut from the strip's cells. A cycle longer than the cell cap was
+    # subsampled there, so asking for more frames than cells repeats cells back to back
+    # and the GIF writer merges the identical neighbours — the file then holds fewer
+    # frames than requested and verification refused it (2026-09-20: a 68-frame jump cycle
+    # capped at 64 cells came back as a 64-frame GIF "expected 68").
+    n_out = min(n_out, int(strip_meta["frames"]))
     strip_path = out_dir / f"{name}.strip.png"
     strip.save(strip_path)
     atomic_write_text(out_dir / f"{name}.strip.json", json.dumps(strip_meta, indent=2) + "\n")

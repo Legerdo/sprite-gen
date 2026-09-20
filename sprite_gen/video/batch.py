@@ -28,6 +28,11 @@ from sprite_gen.video import frames as frames_mod
 from sprite_gen.video import loop as loop_mod
 
 START_GAP_SECONDS = 2.0
+# Clip length the batch asks the video model for. 3 s holds two or more cycles of every
+# repeating state (walk periods measured at 0.6-1.3 s, 2026-09-18) and a single action
+# for jump/attack, which the one-shot cut handles; 6 s bought nothing but a longer wait
+# and, for jump, more idle standing between hops.
+DEFAULT_DURATION_SECONDS = 3
 RETRY_BACKOFF_SECONDS = (15, 30)
 VIEW_TEXT = {
     "side": "seen from the exact side, facing right",
@@ -204,7 +209,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--states", default="idle,walk,run,jump,attack", help="comma list of motion states")
     parser.add_argument("--out-dir", required=True, type=Path, help="batch root; one folder per direction-state")
     parser.add_argument("--character", help="short subject phrase used in the prompts (e.g. 'The armored knight')")
-    parser.add_argument("--duration", type=int, default=6)
+    parser.add_argument("--duration", type=int, default=DEFAULT_DURATION_SECONDS, help=f"seconds per clip (default {DEFAULT_DURATION_SECONDS}); a repeating motion holds enough cycles at 3 s and a longer clip only costs more (2026-09-18)")
     parser.add_argument("--resolution", default="720p")
     parser.add_argument("--key", choices=("auto", "green", "magenta", "white"), default="auto")
     parser.add_argument("--concurrency", type=int, default=3, help="parallel clip generations (starts are staggered regardless)")
@@ -220,7 +225,7 @@ def run(**kwargs: object) -> int:
         bases=_parse_bases(list(kwargs.get("base") or [])),  # type: ignore[arg-type]
         states=[s.strip() for s in str(kwargs.get("states") or "").split(",") if s.strip()],
         root=Path(str(kwargs["out_dir"])), character=kwargs.get("character"),  # type: ignore[arg-type]
-        duration=int(kwargs.get("duration") or 6), resolution=str(kwargs.get("resolution") or "720p"), key=str(kwargs.get("key") or "auto"),
+        duration=int(kwargs.get("duration") or DEFAULT_DURATION_SECONDS), resolution=str(kwargs.get("resolution") or "720p"), key=str(kwargs.get("key") or "auto"),
         concurrency=int(kwargs.get("concurrency") or 3), force=bool(kwargs.get("force")), gap=float(kwargs.get("start_gap") or START_GAP_SECONDS),
         shape=(str(kwargs["shape"]) if kwargs.get("shape") else None), anchor=str(kwargs.get("anchor") or "none"), spill=str(kwargs.get("spill") or "auto"),
     )
