@@ -2,7 +2,7 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
-## Unreleased (v2.4.0)
+## v2.4.0 - Three-second clips and gait windows in seconds
 
 - `video-set --duration` defaults to 3 seconds (was 6). A repeating motion holds two or more cycles at 3 s (walk strides measured at 0.6–1.3 s across seven bodies), a single action is one hop or swing that the one-shot cut already handles, and 6 s bought only a longer wait — and, for jump, more idle standing between hops. `--duration 6` still asks for a longer clip.
 - `video-loop` walk and run take their period window in seconds (walk 0.5–1.6 s, run 0.3–1.2 s, capped at half the clip) instead of a fraction of the clip length. At 3 s the old 6–31 % window topped out at 0.96 s and put a 1.0–1.3 s stride out of reach: on four walks generated at 3 s it refused one outright and cut another at a half step; with the bounds in seconds all four pass with equal or better seams, and the 6 s results are unchanged. Idle, jump and attack keep their windows.
