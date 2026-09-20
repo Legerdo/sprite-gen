@@ -2,20 +2,34 @@
 """Unified image generation layer for sprite-gen.
 
 Single source of truth for provider-backed image generation: codex (`image_gen`,
-ChatGPT OAuth) and grok (Imagine, xAI OAuth). One call = prompt (+ optional refs)
--> one verified raw PNG, with an optional deterministic transparent chroma
-post-process. The general `image-gen` skill is a thin shuttle over `sprite-gen gen`.
+ChatGPT OAuth), grok (Imagine, xAI OAuth) and openai (Images REST, OPENAI_API_KEY).
+One call = prompt (+ optional refs) -> one verified raw PNG, with an optional
+deterministic transparent chroma post-process. The general `image-gen` skill is a
+thin shuttle over `sprite-gen gen`.
+
+codex and openai reach the same family of GPT image models by different routes:
+codex needs an interactive ChatGPT login and the `codex` CLI on PATH, openai needs
+only an API key, which is what a headless container (Modal worker, CI) can have.
+
+sprite-gen is subscription-first (수홍 2026-09-20). openai exists for servers and
+SaaS and is billed per call, so it runs ONLY when `--provider openai` names it: it
+is never a default, never a saved preference, never an offered choice in the guided
+flow, and never the target of an availability fallback. Having OPENAI_API_KEY in
+the environment changes no route by itself.
 
 Transparency is a per-provider strategy (`Provider.transparency`, declared once
-in each adapter): codex `image_gen` returns a genuinely transparent PNG when asked
-(`native`), grok Imagine cannot and is keyed out of a chroma background (`chroma`).
-`--transparent` follows the provider's strategy unless `--alpha-mode` overrides it.
+in each adapter): codex `image_gen` and openai (`background: transparent`) return a
+genuinely transparent PNG when asked (`native`), grok Imagine cannot and is keyed
+out of a chroma background (`chroma`). `--transparent` follows the provider's
+strategy unless `--alpha-mode` overrides it.
 
 CLI:
-    sprite-gen gen --provider codex|grok --prompt "..." --out DEST.png
+    sprite-gen gen --provider codex|grok|openai --prompt "..." --out DEST.png
         [--ref REF.png ...] [--transparent [--alpha-mode auto|native|chroma]
         [--chroma-key magenta|green]] [--white-check CHECK.png] [--model ID]
-        [--aspect-ratio 1:1] [--report REPORT.json] [--keep-session]
+        [--aspect-ratio 1:1] [--quality low|medium|high|xhigh|max|auto]
+        [--resolution 1k|1.5k|2k]
+        [--report REPORT.json] [--keep-session]
 """
 
 from __future__ import annotations
@@ -34,6 +48,8 @@ from sprite_gen.spec.runio import atomic_write_text
 
 from . import chroma as chroma_mod
 from .base import (
+    QUALITIES,
+    RESOLUTIONS,
     TRANSPARENCY_CHROMA,
     TRANSPARENCY_NATIVE,
     TRANSPARENCY_STRATEGIES,
@@ -46,8 +62,9 @@ from .base import (
 )
 from .codex_provider import CodexProvider
 from .grok_provider import GrokProvider
+from .openai_provider import OpenAIProvider
 
-PROVIDERS = ("codex", "grok")
+PROVIDERS = ("codex", "grok", "openai")
 # `--alpha-mode`: `auto` reads the provider's declared strategy (the SSoT);
 # `native` / `chroma` force one. Forcing `native` on a chroma-only provider fails
 # loud — a strategy the backend cannot execute is not a fallback candidate.
@@ -63,6 +80,10 @@ ALPHA_MODES = (ALPHA_MODE_AUTO, *TRANSPARENCY_STRATEGIES)
 # explicitly named provider that is down fails loud at generation time.
 DEFAULT_PROVIDER_ENV = "SPRITE_GEN_DEFAULT_PROVIDER"
 HARD_DEFAULT_PROVIDER = "codex"
+# Providers that may be reached without being named. A per-call API-billed backend
+# is not one of them: it is explicit-only, so no default, preference or fallback
+# can route a subscription user onto metered credit (구독 우선 불변식 1-2).
+EXPLICIT_ONLY_PROVIDERS = ("openai",)
 _CODEX_PROBE_TIMEOUT_SECONDS = 15
 
 
@@ -71,6 +92,8 @@ def _make_provider(name: str, *, keep_session: bool):
         return CodexProvider(keep_session=keep_session)
     if name == "grok":
         return GrokProvider()
+    if name == "openai":
+        return OpenAIProvider()
     raise SystemExit(f"gen: unknown provider {name!r}; expected one of {', '.join(PROVIDERS)}")
 
 
@@ -149,6 +172,10 @@ def resolve_default_provider() -> tuple[str, dict[str, str] | None]:
     resolved default is codex but codex is unavailable, fall back to grok and return
     fallback metadata (from/to/reason/default_source) so the switch is observable.
     Returns (provider, fallback_or_None).
+
+    An EXPLICIT_ONLY provider can never come out of here: not as the hard default,
+    not out of the env, and not as a fallback target. A codex outage reaches grok
+    (another subscription route) or nothing at all — never metered API credit.
     """
     configured = os.environ.get(DEFAULT_PROVIDER_ENV, "").strip()
     if configured:
@@ -157,13 +184,21 @@ def resolve_default_provider() -> tuple[str, dict[str, str] | None]:
                 f"gen: {DEFAULT_PROVIDER_ENV}={configured!r} is not a known provider; "
                 f"expected one of {', '.join(PROVIDERS)}"
             )
+        if configured in EXPLICIT_ONLY_PROVIDERS:
+            raise SystemExit(
+                f"gen: {DEFAULT_PROVIDER_ENV}={configured!r} is refused — {configured} bills per call "
+                f"against an API key and must be named explicitly (`--provider {configured}`), never "
+                f"stood up as a default. Use {', '.join(p for p in PROVIDERS if p not in EXPLICIT_ONLY_PROVIDERS)} "
+                "for a subscription route."
+            )
         default, source = configured, DEFAULT_PROVIDER_ENV
     else:
         default, source = HARD_DEFAULT_PROVIDER, "hard-default"
 
-    # The availability-driven fallback is codex -> grok only (the mandated default).
-    # A grok default that is down fails loud at generation time rather than silently
-    # reverse-falling-back to codex.
+    # The availability-driven fallback is codex -> grok only (the mandated default):
+    # one subscription route to another, never to a per-call API key. A grok default
+    # that is down fails loud at generation time rather than silently reverse-falling
+    # back to codex.
     if default == "codex":
         ok, reason = _codex_available()
         if not ok:
@@ -210,6 +245,8 @@ def generate_image(
     refs: list[Path] | None = None,
     model: str | None = None,
     aspect_ratio: str | None = None,
+    quality: str | None = None,
+    resolution: str | None = None,
     transparent: bool = False,
     alpha_mode: str = ALPHA_MODE_AUTO,
     chroma_key: str = "magenta",
@@ -254,6 +291,8 @@ def generate_image(
             refs=refs,
             model=model,
             aspect_ratio=aspect_ratio,
+            quality=quality,
+            resolution=resolution,
             native_alpha=strategy == TRANSPARENCY_NATIVE,
         )
         # 타임아웃 1회 관측 가능 재시도 — 산발 provider 스톨은 같은 호출 재시도로
@@ -341,6 +380,8 @@ def _run(args: argparse.Namespace) -> int:
         refs=args.ref,
         model=args.model,
         aspect_ratio=args.aspect_ratio,
+        quality=args.quality,
+        resolution=args.resolution,
         transparent=args.transparent,
         alpha_mode=args.alpha_mode,
         chroma_key=args.chroma_key,
@@ -396,7 +437,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             f"generation backend; default resolves via {DEFAULT_PROVIDER_ENV} env "
-            "then codex, with an observable grok fallback if codex is unavailable"
+            "then codex, with an observable grok fallback if codex is unavailable. "
+            "codex and grok run on a subscription login; openai is for servers and SaaS "
+            "and is billed per call on OPENAI_API_KEY, so it runs only when named here"
         ),
     )
     parser.add_argument("--prompt")
@@ -404,13 +447,37 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--ref", action="append", type=Path, default=[], help="reference image (repeatable)")
     parser.add_argument("--model")
-    parser.add_argument("--aspect-ratio", help="grok only, e.g. 1:1 16:9 9:16")
+    parser.add_argument("--aspect-ratio", help="grok and openai, e.g. 1:1 16:9 9:16 (openai maps it to a gpt-image size; codex ignores it)")
+    parser.add_argument(
+        "--quality",
+        choices=QUALITIES,
+        default=None,
+        help=(
+            "rendering effort billed for this image; openai carries the whole range "
+            "(low..max, auto = the model decides) and grok takes low / medium / auto. "
+            "Omitted = the provider's own default. A provider that cannot honour the "
+            "level fails instead of downgrading it"
+        ),
+    )
+    parser.add_argument(
+        "--resolution",
+        choices=RESOLUTIONS,
+        default=None,
+        help=(
+            "output size tier, priced together with --quality: grok Imagine's "
+            "1k / 1.5k / 2k (tier names, not pixel counts — 1.5k renders 1408px at 1:1). "
+            "Omitted = the provider's own default (grok: 1k). openai sizes from "
+            "--aspect-ratio and codex from neither, so both refuse this flag "
+            "instead of ignoring it"
+        ),
+    )
     parser.add_argument(
         "--transparent",
         action="store_true",
         help=(
             "publish a transparent RGBA PNG using the provider's transparency strategy: "
-            "codex asks image_gen for real alpha (native), grok is keyed out of a chroma background"
+            "codex asks image_gen for real alpha and openai asks for background=transparent (native), "
+            "grok is keyed out of a chroma background"
         ),
     )
     parser.add_argument(
@@ -419,7 +486,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=ALPHA_MODE_AUTO,
         help=(
             "transparency strategy for --transparent: auto = the provider's declared strategy "
-            "(native on codex, but chroma whenever --ref is attached — native alpha with refs is unstable); "
+            "(native on codex and openai, but chroma whenever --ref is attached — native alpha with refs is unstable); "
             "chroma forces chroma keying (e.g. a codex prompt that already carries a key background); "
             "native forces native alpha and is refused on a provider that cannot return alpha"
         ),

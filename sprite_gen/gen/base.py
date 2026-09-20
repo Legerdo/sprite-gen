@@ -10,11 +10,16 @@ path or a "done" string (No Silent Fallback).
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
+import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+
+from PIL import Image, UnidentifiedImageError
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -28,6 +33,23 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 TRANSPARENCY_NATIVE = "native"
 TRANSPARENCY_CHROMA = "chroma"
 TRANSPARENCY_STRATEGIES = (TRANSPARENCY_NATIVE, TRANSPARENCY_CHROMA)
+
+# Quality is a per-provider capability over one shared vocabulary. This tuple is
+# the `--quality` surface (the union); each provider declares the subset it can
+# honour and fails loud on a name outside it, so a paid-for level is never
+# quietly downgraded to whatever the backend felt like (No Silent Fallback).
+QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
+
+# Output resolution — the second billed knob, over one shared vocabulary of grok
+# Imagine's output-size tiers, which it prices together with `quality`. The names
+# are tiers, not pixel counts: `1.5k` rendered 1408x1408 at 1:1, not 1536
+# (2026-09-20 실측 on the XAI_API_KEY route), so nothing here derives a size from
+# the name — the tier goes to the service verbatim and the service sizes. A
+# provider that sizes differently (openai derives a gpt-image `size` from
+# `--aspect-ratio`) refuses the flag rather than accepting money for a resolution
+# it will not deliver. Distinct from the video RESOLUTIONS
+# (`480p`/`720p`/`1080p`), which names a frame height.
+RESOLUTIONS = ("1k", "1.5k", "2k")
 
 # Child provider processes are independent execution contexts. They must not
 # inherit parent orchestration identity or lifecycle controls, while ordinary
@@ -81,6 +103,21 @@ def provider_binary(name: str) -> str:
     return shutil.which(name) or name
 
 
+def announce_api_billing(provider: str, env_name: str, detail: str = "") -> None:
+    """Say on stderr, before the request leaves, that this call bills API credit.
+
+    sprite-gen is a subscription-first tool: codex runs on a ChatGPT login and
+    grok prefers its Grok login. A route that instead spends metered API credit
+    is never silent about it, because the person paying only finds out otherwise
+    on the invoice (수홍 2026-09-20, 구독 우선 불변식 5).
+    """
+    print(
+        f"[gen] {provider}: running on {env_name} — this is a per-call API charge, "
+        f"not a subscription{detail}",
+        file=sys.stderr,
+    )
+
+
 def verify_png(path: Path) -> int:
     """Return the PNG byte count, or raise SystemExit if it is missing/not a PNG."""
     if not path.is_file():
@@ -99,11 +136,49 @@ class GenRequest:
     raw: Path  # provider writes the generated PNG (chroma background included) here
     refs: list[Path] = field(default_factory=list)
     model: str | None = None
-    aspect_ratio: str | None = None  # grok honours this; codex ignores it
+    aspect_ratio: str | None = None  # grok honours this; openai maps it to a size; codex ignores it
+    # Rendering effort/fidelity level, from QUALITIES. None = the provider's own
+    # default; a level the provider does not support is an error, not a downgrade.
+    quality: str | None = None
+    # Output resolution, from RESOLUTIONS. None = the provider's own default
+    # (grok: `1k`); a provider that cannot size its output this way is an error,
+    # not a downgrade.
+    resolution: str | None = None
     # Ask the model for a genuinely transparent background (alpha channel). Only
     # legal for a provider whose `transparency` is `native`; the orchestrator gates
     # it and the provider carries the request into its transport prompt.
     native_alpha: bool = False
+
+
+def publish_png(data: bytes, path: Path, *, label: str) -> None:
+    """Publish decoded provider image bytes as a verified PNG at `path`.
+
+    One writer for every provider: decode first (a corrupt or non-image payload
+    fails before anything is published), re-encode only when the payload is not
+    already a PNG — grok Imagine answers with JPEG — then verify the bytes and
+    swap them in atomically. Nothing is resized. A failure leaves whatever was at
+    `path` untouched, so a stale raw is never reused as a result.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            source.load()
+            if source.format == "PNG":
+                png = data
+            else:
+                buffer = io.BytesIO()
+                source.convert("RGBA" if "A" in source.getbands() else "RGB").save(buffer, format="PNG")
+                png = buffer.getvalue()
+    except (OSError, ValueError, UnidentifiedImageError) as exc:
+        raise SystemExit(f"{label}: response image is invalid; nothing published") from exc
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".png", delete=False) as tmp:
+        temp = Path(tmp.name)
+    try:
+        temp.write_bytes(png)
+        verify_png(temp)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 @dataclass
