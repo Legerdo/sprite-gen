@@ -173,11 +173,22 @@ was 17). `video-loop` therefore:
 2. reads the **global period profile** `P[L] = mean_j |f[j] − f[j+L]|` and takes the
    *smallest* local minimum that is within 15 % of the deepest one — exact repeats dip
    again at 2× and 3× the period, the half-period look-alike dips noticeably less;
-3. only then picks the **start** with the best seam for that period (± 1 frame):
+3. only then ranks **starts** for that period (± 1 frame):
    `seam = D[i+L-1][i]` over the mean adjacent distance inside the cycle.
-   Choose the ratio closest to 1 in log space, so a repeated pose at the wrap does
-   not win just because its distance is small. `next_frame_distance` retains the
-   distance to the frame after the cycle for diagnostics.
+   Penalise distance from 1 in log space, so a repeated pose at the wrap does
+   not win just because its distance is small. For walks and runs, also compare
+   corresponding frames one cycle apart in the neighbourhood of the cut: a
+   quarter-cycle on either side, clipped to available source pairs. Add their
+   mean distance divided by the candidate's mean adjacent distance to the wrap
+   penalty. This favours a coherent repeating region over an accidental endpoint
+   match, without preferring an early or late start. Other states keep wrap-only
+   ranking. `cycle.selection` records the half-open source-pair range, repeat
+   error, normalised error, wrap penalty and combined score; `next_frame_distance`
+   retains the single-frame diagnostic. Fixed cuts do not use this ranking.
+
+This neighbourhood check measures temporal consistency, not anatomical leg
+identity. A consistently repeated malformed motion can still score well; visual
+review remains necessary when correct limb alternation matters.
 
 Windows come from the state profile (`STATE_PROFILES`). **Gait states take theirs in
 seconds**, because a stride is a fact about the body, not about the clip length: walk
@@ -327,4 +338,3 @@ reported) and `foot_x` (the mean foot column inside every cell), plus the spec l
 `anchor` as `[foot_x, h]` so a scene stands the sprite on its foot line; `video-set`'s
 table row carries `drift_px`. The default stays `none`: existing strips do not change,
 and `drift_px` / `foot_sway_px` are 0 when they were not measured.
-
