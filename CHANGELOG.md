@@ -2,6 +2,13 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## v2.5.2 - Cleaner video spill correction
+
+- Automatic spill selection distinguishes the key hue from yellow/cyan or red/blue material and discounts dark contamination in the reference matte edge band. Bright key-coloured details still count as material.
+- Full correction removes faint key casts while recovering brightness without amplifying residual colour differences into secondary casts. The declared key defines channel groups even when the painted background is dim or asymmetric.
+- Alpha, conservative `small` correction and gait selection logic are unchanged. Existing source colours without the key hue remain; this does not reconstruct the original material palette.
+- Synthetic regressions cover colour preservation, bright edge details, secondary-cast amplification and imperfect painted keys.
+
 ## v2.5.1 - More consistent automatic walk and run loops
 
 - Automatic gait cuts now score whether neighbouring poses repeat one cycle later as well as the last-to-first transition. This reduces selection of irregular motion that happens to have a plausible seam, without preferring an earlier or later part of the clip.
