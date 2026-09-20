@@ -48,6 +48,16 @@ PERIODICITY_MIN = 0.15  # the period must dip at least 15% below the profile mea
 GIF_FPS_DEFAULT = 24.0  # GIF/WebP playback density = the source rate: every cycle frame is kept, a fast action never looks slow (12 made a jump read sluggish, 2026-09-09)
 GIF_FRAMES_MIN = 4
 ONE_SHOT_MIN_CONTRAST = 3.0  # one-shot: the excursion peak must stand this far above the rest-pose noise (in MADs)
+# Second acceptance for the one-shot excursion, in units of the subject itself: the peak
+# must move at least this fraction of the rest frame's pixel mass. The MAD contrast
+# measures the peak against the spread of *every* frame's distance to the rest pose,
+# and that spread is not rest noise when the rest is not one pose — a body that walks a
+# few steps, hops once and then freezes (2026-09-20 jump field test: 42 px of lift refused
+# at 1.8 MADs because the walking preamble and the frozen tail sit 0.03 apart). Moved
+# mass is scale-free: a hop shifts the whole silhouette out of its own footprint (measured
+# 0.54-1.07 on eight jumps), a jittering stand does not (0.12-0.24 on the synthetic
+# jitter-only fixtures).
+ONE_SHOT_MIN_MOVED = 0.4
 ONE_SHOT_PAD = 2  # one-shot: rest frames kept on each side of the excursion so the seam is rest -> rest
 CYCLE_MODES = ("auto", "periodic", "one-shot", "fixed")
 ONE_SHOT_MIN_LEN = 4  # a one-shot's length is the clip's own fact; only a degenerate cut is refused
@@ -127,6 +137,12 @@ def _load_small(path: Path) -> np.ndarray:
     return np.concatenate([rgb, a[..., 3:4]], axis=-1).reshape(-1)
 
 
+def frame_masses(files: list[Path]) -> np.ndarray:
+    """Per-frame pixel mass of the analysis thumbnail (mean |premultiplied rgba|): how much
+    subject there is, on the same scale as the distance matrix."""
+    return np.array([float(np.abs(_load_small(f)).mean()) for f in files], dtype=np.float32)
+
+
 def distance_matrix(files: list[Path]) -> np.ndarray:
     flat = np.stack([_load_small(f) for f in files])
     n = len(files)
@@ -188,42 +204,51 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
     return best
 
 
-def detect_one_shot(D: np.ndarray, *, min_len: int, max_len: int) -> dict[str, Any]:
+def detect_one_shot(D: np.ndarray, *, min_len: int, max_len: int, frame_mass: np.ndarray | None = None) -> dict[str, Any]:
     """A cycle for an action the model performed ONCE: rest -> excursion -> rest.
 
     The rest pose is the medoid frame (smallest mean distance to every other frame — in a
     clip that mostly stands still that is a standing frame). Frames whose distance to it
     rises above the rest noise (median + ONE_SHOT_MIN_CONTRAST MADs) are the excursion; the
-    longest contiguous run of them, padded by ONE_SHOT_PAD rest frames on each side, is the
-    cycle, so the loop seam is rest -> rest by construction. Fails loud when nothing stands
+    contiguous run of them that holds the peak, padded by ONE_SHOT_PAD rest frames on each
+    side, is the cycle, so the loop seam is rest -> rest by construction. Fails loud when nothing stands
     out or the excursion does not fit the window — never returns a guess.
+
+    `frame_mass` (from `frame_masses`) enables the second acceptance rule: when the MAD
+    contrast is under the bar because the rest is not one pose, a peak that moves at least
+    ONE_SHOT_MIN_MOVED of the rest frame's pixel mass is still an excursion, and the
+    active frames are then those above half the peak (the hump itself) rather than a
+    noise threshold that the peak does not clear.
     """
     n = D.shape[0]
     rest = int(np.argmin(D.mean(axis=1)))
     e = D[rest]
     med = float(np.median(e))
     mad = float(np.median(np.abs(e - med))) or 1e-6
-    contrast = (float(e.max()) - med) / mad
-    if contrast < ONE_SHOT_MIN_CONTRAST:
+    peak = float(e.max())
+    contrast = (peak - med) / mad
+    moved = (peak - med) / float(frame_mass[rest]) if frame_mass is not None and float(frame_mass[rest]) > 0 else None
+    if contrast >= ONE_SHOT_MIN_CONTRAST:
+        rule = "contrast"
+        active = e > med + ONE_SHOT_MIN_CONTRAST * mad
+    elif moved is not None and moved >= ONE_SHOT_MIN_MOVED:
+        rule = "moved"
+        active = e > med + 0.5 * (peak - med)
+    else:
+        by_mass = f", moved {moved:.2f} of the subject's mass, need {ONE_SHOT_MIN_MOVED}" if moved is not None else ""
         raise SystemExit(
             f"video-loop: no one-shot excursion either — the clip never leaves its rest pose "
-            f"(peak {contrast:.1f} MADs above rest, need {ONE_SHOT_MIN_CONTRAST}); regenerate the clip"
+            f"(peak {contrast:.1f} MADs above rest, need {ONE_SHOT_MIN_CONTRAST}{by_mass}); regenerate the clip"
         )
-    active = e > med + ONE_SHOT_MIN_CONTRAST * mad
-    best_run: tuple[int, int] | None = None
-    j = 0
-    while j < n:
-        if active[j]:
-            k = j
-            while k + 1 < n and active[k + 1]:
-                k += 1
-            if best_run is None or (k - j) > (best_run[1] - best_run[0]):
-                best_run = (j, k)
-            j = k + 1
-        else:
-            j += 1
-    assert best_run is not None
-    a, b = best_run
+    # The excursion is the contiguous active run that holds the peak — the largest
+    # departure from rest — not the longest run: a walking preamble can be a longer
+    # departure than the hop itself and would otherwise be cut instead of the action.
+    peak_at = int(np.argmax(e))
+    a = b = peak_at
+    while a > 0 and active[a - 1]:
+        a -= 1
+    while b + 1 < n and active[b + 1]:
+        b += 1
     start = max(0, a - ONE_SHOT_PAD)
     end = min(n - 1, b + ONE_SHOT_PAD)
     L = end - start + 1
@@ -249,6 +274,8 @@ def detect_one_shot(D: np.ndarray, *, min_len: int, max_len: int) -> dict[str, A
         "rest_frame": rest,
         "excursion": [a, b],
         "excursion_contrast": round(contrast, 2),
+        "excursion_moved": round(moved, 3) if moved is not None else None,
+        "excursion_rule": rule,  # which acceptance admitted it: "contrast" (MADs) or "moved" (subject mass)
     }
 
 
@@ -538,13 +565,14 @@ def run_loop(
     lo = min_len if min_len is not None else lo_default
     hi = max_len if max_len is not None else max(lo + 2, hi_default)
     D = distance_matrix(files)
+    masses = frame_masses(files)
     periodic_attempt: dict[str, Any] | None = None
     if cycle_mode == "fixed":
         if start is None or length is None:
             raise SystemExit("video-loop: --cycle fixed needs --start and --length")
         cycle = fixed_cycle(D, start=start, length=length)
     elif cycle_mode == "one-shot":
-        cycle = detect_one_shot(D, min_len=lo, max_len=hi)
+        cycle = detect_one_shot(D, min_len=lo, max_len=hi, frame_mass=masses)
     else:
         gait_floor = round(prof.min_seconds * fps) if prof.gait and prof.min_seconds > 0 else None
         cycle = detect_cycle(D, min_len=lo, max_len=hi, gait_floor=gait_floor)
@@ -557,7 +585,7 @@ def run_loop(
                 # explicit, recorded failover: the action happened once (allowed for this state),
                 # so cut rest -> excursion -> rest instead. The periodic attempt stays in the report.
                 periodic_attempt = {"periodicity": cycle["periodicity"], "window": [lo, hi], "profile_minima": cycle["profile_minima"], "why_rejected": flat}
-                cycle = detect_one_shot(D, min_len=lo, max_len=max(hi, round(n * 0.9)))
+                cycle = detect_one_shot(D, min_len=lo, max_len=max(hi, round(n * 0.9)), frame_mass=masses)
             else:
                 raise SystemExit(
                     f"video-loop: no periodic cycle found — {flat}; the motion does not repeat, widen the window, "
