@@ -69,6 +69,7 @@ ONE_SHOT_MIN_LEN = 4  # a one-shot's length is the clip's own fact; only a degen
 # taken when it repeats about as well. The cost is asymmetric — a wrongly doubled cycle
 # is still a clean two-cycle loop, a halved one walks on one leg.
 GAIT_DOUBLE_TOL = 0.25
+GAIT_NEAR_EXACT_STEP_FRACTION = 0.10  # no ambiguity extension when repeat error is tiny compared with a playback step
 ANCHOR_MODES = ("none", "feet")
 FOOT_BAND = 0.08  # fraction of the frame's own height, measured up from its lowest opaque row
 
@@ -157,7 +158,8 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
 
     `gait_floor` (frames) turns on the half-period guard: a period below it is one step
     of a two-step gait, so the doubled period is taken when it repeats about as well
-    (see GAIT_DOUBLE_TOL)."""
+    (see GAIT_DOUBLE_TOL). Above the floor, ambiguous non-exact harmonics may also
+    retain two phase occurrences; the report flags that decision for visual review."""
     n = D.shape[0]
     max_len = min(max_len, n - 2)
     if min_len < 2 or max_len < min_len:
@@ -184,7 +186,32 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
                 period = L2
             else:
                 guard = {"applied": False, "below_floor": period, "gait_floor": gait_floor, "why": "the doubled period repeats too much worse to be the same gait"}
+    # A plausible duration does not prove that a gait contains both phases. If a
+    # second local minimum at twice the period is similarly good, retain both
+    # occurrences at the original fps. This is a conservative ambiguity policy,
+    # not an anatomical inference: a true short cycle may be shown twice.
+    # Do it only once, inside the requested window, and leave near-exact repeats
+    # alone. The duration-floor guard above still owns implausibly short beats.
     profile_mean = float(np.mean([prof[L] for L in prof]))
+    review_recommended = False
+    if gait_floor is not None and period >= gait_floor and not guard["applied"]:
+        ordinary_step = float(adjacent.mean())
+        repeat_fraction = prof[period] / ordinary_step if ordinary_step > 0 else math.inf
+        doubles = [L for L in cands if abs(L - 2 * period) <= 1]
+        if doubles and repeat_fraction > GAIT_NEAR_EXACT_STEP_FRACTION:
+            L2 = min(doubles, key=lambda L: prof[L])
+            if (prof[L2] <= prof[period] * (1 + GAIT_DOUBLE_TOL) + 1e-4
+                    and profile_mean > 0
+                    and (profile_mean - prof[L2]) / profile_mean >= PERIODICITY_MIN):
+                guard = {
+                    "applied": True, "from": period, "to": L2,
+                    "gait_floor": gait_floor, "reason": "ambiguous-harmonic",
+                    "depth_ratio": round(prof[L2] / prof[period], 3),
+                    "repeat_error_over_step": round(repeat_fraction, 3),
+                    "why": "both periods are plausible; retain two phase occurrences at source speed",
+                }
+                period = L2
+                review_recommended = True
     periodicity = (profile_mean - prof[period]) / profile_mean if profile_mean > 0 else 0.0
     # Score the last displayed frame -> first frame transition against an ordinary
     # playback step. Minimising distance alone rewards a repeated pose (a stall).
@@ -206,6 +233,7 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
     best.pop("wrap_score")
     best["period_global"] = period
     best["half_period_guard"] = guard
+    best["review_recommended"] = review_recommended
     best["periodicity"] = round(periodicity, 4)  # how far below the profile mean the period dips (0 = flat = no period)
     best["profile_minima"] = [[L, round(prof[L], 5)] for L in sorted(cands, key=lambda L: prof[L])[:6]]
     return best
@@ -716,7 +744,7 @@ def run(**kwargs: object) -> int:
         anchor=str(kwargs.get("anchor") or "none"),
     )
     summary = {k: payload[k] for k in ("state", "frames_total", "window", "cycle_seconds", "n_out", "delay_ms", "resampled_seam_ratio", "specks_dropped", "report")}
-    summary["cycle"] = {k: payload["cycle"].get(k) for k in ("kind", "start", "length", "period_global", "ratio")}
+    summary["cycle"] = {k: payload["cycle"].get(k) for k in ("kind", "start", "length", "period_global", "ratio", "review_recommended", "half_period_guard")}
     if payload["periodic_attempt"]:
         summary["periodic_attempt"] = payload["periodic_attempt"]["why_rejected"]
     summary["strip"] = {k: payload["strip"][k] for k in ("path", "frames", "w", "h", "body_h", "delay_ms")}

@@ -196,6 +196,16 @@ periodicity gate measures the period's dip against the profile mean over the who
 window, and a ceiling that grows with the clip inflates that mean until a single hop
 in a jittering stand passes as a walk.
 
+For gait states, a duration above the floor is not proof that both phases are present.
+If a local minimum near twice the chosen period is within the existing 25 % repeat-error
+tolerance and still passes the periodicity gate, the detector retains the longer candidate
+once, inside the requested window. Near-exact repeats (repeat error at most 10 % of an
+ordinary adjacent step) stay short. This is a conservative response to ambiguous harmonics:
+a genuine short gait may be shown twice, at the same source speed. It does not identify
+anatomical left/right contacts. The report records `half_period_guard.reason =
+"ambiguous-harmonic"` and `cycle.review_recommended = true`. See [loop review](loop-review.md)
+for the visual review contract and manual overrides.
+
 Gates, all fail-loud: no period (profile flat, `periodicity < 0.15`), loop seam ratio
 above `--seam-max` (2.0), GIF/WebP re-opened and checked (frame count, `loop=0`,
 transparent corners, no RGB under alpha 0 in the WebP).
