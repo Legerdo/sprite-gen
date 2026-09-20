@@ -11,7 +11,14 @@ from pathlib import Path
 from PIL import Image, UnidentifiedImageError
 
 from . import xai
-from .base import GEN_TIMEOUT_SECONDS, TRANSPARENCY_CHROMA, GenRequest, ProviderRun, publish_png
+from .base import (
+    GEN_TIMEOUT_SECONDS,
+    TRANSPARENCY_CHROMA,
+    GenRequest,
+    ProviderRun,
+    announce_api_billing,
+    publish_png,
+)
 
 DEFAULT_MODEL = "grok-imagine-image-2.0"
 MAX_REFS = 5
@@ -79,7 +86,12 @@ class GrokProvider:
         if request.native_alpha:
             raise SystemExit("grok-gen: grok Imagine cannot return an alpha channel; generate on a chroma key instead")
         endpoint, body = _request_body(request)
+        # The login is preferred (xai.resolve_credential); reaching the key means no
+        # login exists, and that spends API credit instead of the Grok subscription.
         credential = xai.resolve_credential()
+        if credential.source == xai.AUTH_SOURCE_API_KEY:
+            announce_api_billing(self.name, xai.AUTH_ENV,
+                                 f", not your Grok subscription — `{xai.GROK_LOGIN_COMMAND}` signs that in.")
         started = time.monotonic()
         status, reply = xai.http_json("POST", xai.API_BASE + endpoint, credential.token,
                                       body, timeout=GEN_TIMEOUT_SECONDS)

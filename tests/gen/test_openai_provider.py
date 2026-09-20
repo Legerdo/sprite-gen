@@ -9,6 +9,7 @@ which failures must never publish, retry or leak the key.
 import base64
 import io
 import json
+import os
 import subprocess
 import urllib.error
 
@@ -16,10 +17,12 @@ import pytest
 from PIL import Image
 
 from sprite_gen import gen
+from sprite_gen.gen import grok_provider as grok
 from sprite_gen.gen import openai_provider as openai
+from sprite_gen.gen import xai
 from sprite_gen.gen.base import GenRequest
 from sprite_gen.workflow import access
-from sprite_gen.workflow.catalog import FIELDS, PROVIDER_LABELS
+from sprite_gen.workflow.catalog import FIELDS, GUIDED_PROVIDERS, PROVIDER_LABELS, validate_choices
 
 KEY = "synthetic-secret"
 
@@ -36,6 +39,24 @@ def encoded_image(fmt="PNG", *, alpha=False, key=False):
     buf = io.BytesIO()
     image.save(buf, format=fmt)
     return base64.b64encode(buf.getvalue()).decode()
+
+
+class _GrokResponse:
+    """Minimal 200 answer for the xai transport (a PNG, so chroma stays untouched)."""
+
+    def __init__(self, request, api):
+        api["calls"].append((request, None))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    status = 200
+
+    def read(self):
+        return json.dumps({"data": [{"b64_json": encoded_image()}]}).encode()
 
 
 @pytest.fixture
@@ -232,12 +253,85 @@ def test_native_alpha_is_a_declared_capability(tmp_path, api):
 def test_provider_is_registered_everywhere_a_provider_must_be(api):
     assert "openai" in gen.PROVIDERS
     assert isinstance(gen._make_provider("openai", keep_session=False), openai.OpenAIProvider)
-    # The workflow surface must name every registered backend, not the first two.
-    assert set(FIELDS["image_provider"]["options"]) == set(gen.PROVIDERS) == set(PROVIDER_LABELS)
+    # Every registered backend is labelled, so a new one can never be dropped from
+    # the workflow surface by a silent positional zip.
+    assert set(PROVIDER_LABELS) == set(gen.PROVIDERS)
     assert access.probe_access("openai") == {"provider": "openai", "login": "ready", "subscription": "unknown",
                                              "quota": "unknown", "billing": "api-credit",
                                              "reason": "OpenAI images will use OPENAI_API_KEY and separate "
                                                        "API credit; confirm this billing choice."}
+
+
+# --- 구독 우선 불변식 (수홍 2026-09-20) --------------------------------------
+# sprite-gen runs on subscriptions people already pay for. The API-key backend is
+# for servers and SaaS and is billed per call, so nothing may route to it on its
+# own. These three tests are the guard rails for invariants 1, 2 and 3.
+
+
+def test_openai_is_explicit_only_and_never_a_default(monkeypatch, api):
+    """불변식 1: no default, no saved preference, no guided-flow option."""
+    assert gen.HARD_DEFAULT_PROVIDER == "codex"
+    assert gen.EXPLICIT_ONLY_PROVIDERS == ("openai",)
+    monkeypatch.delenv("SPRITE_GEN_DEFAULT_PROVIDER", raising=False)
+    monkeypatch.setattr(gen, "_codex_available", lambda: (True, ""))
+    assert gen.resolve_default_provider() == ("codex", None)
+    # The env knob cannot stand it up either.
+    monkeypatch.setenv("SPRITE_GEN_DEFAULT_PROVIDER", "openai")
+    with pytest.raises(SystemExit, match=r"--provider openai"):
+        gen.resolve_default_provider()
+    # Not offered by the guided flow, so it can never be saved as a preference.
+    assert "openai" not in GUIDED_PROVIDERS
+    assert "openai" not in FIELDS["image_provider"]["options"]
+    with pytest.raises(ValueError):
+        validate_choices("image", {"image_provider": "openai"})
+
+
+@pytest.mark.parametrize("configured", [None, "codex"])
+def test_an_api_key_in_the_environment_reroutes_nothing(monkeypatch, api, configured):
+    """불변식 2: a codex outage reaches grok, never the metered key."""
+    assert "OPENAI_API_KEY" in os.environ  # the fixture set it
+    if configured is None:
+        monkeypatch.delenv("SPRITE_GEN_DEFAULT_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("SPRITE_GEN_DEFAULT_PROVIDER", configured)
+    monkeypatch.setattr(gen, "_codex_available", lambda: (False, "synthetic outage"))
+    provider, fallback = gen.resolve_default_provider()
+    assert provider == "grok"
+    assert fallback["from"] == "codex" and fallback["to"] == "grok"
+    assert api["calls"] == []
+
+
+def test_grok_login_still_outranks_its_api_key(tmp_path, api, monkeypatch, capsys):
+    """불변식 3: the Grok subscription login wins over XAI_API_KEY."""
+    monkeypatch.setenv("XAI_API_KEY", "xai-api-secret")
+    monkeypatch.setenv("GROK_HOME", str(tmp_path))
+    (tmp_path / "auth.json").write_text(json.dumps({"account": {
+        "key": "subscription-token", "expires_at": "2100-01-01T00:00:00Z"}}))
+    assert xai.resolve_credential().source == xai.AUTH_SOURCE_GROK_LOGIN
+    monkeypatch.setattr(xai.urllib.request, "urlopen",
+                        lambda request, *, timeout: _GrokResponse(request, api))
+    result = gen.generate_image("grok", "x", tmp_path / "grok.png")
+    assert result.extra["auth_source"] == xai.AUTH_SOURCE_GROK_LOGIN
+    # A subscription call says nothing about API billing; only the key route does.
+    assert "per-call API charge" not in capsys.readouterr().err
+
+
+def test_every_api_key_call_announces_the_charge_before_it_leaves(tmp_path, api, capsys):
+    """불변식 5: one stderr line, before the request, naming the billing route."""
+    gen.generate_image("openai", "x", tmp_path / "out.png", quality="low")
+    notice = [line for line in capsys.readouterr().err.splitlines() if "per-call API charge" in line]
+    assert len(notice) == 1
+    assert "OPENAI_API_KEY" in notice[0] and "quality=low" in notice[0]
+
+
+def test_grok_on_an_api_key_announces_the_charge_too(tmp_path, api, monkeypatch, capsys):
+    monkeypatch.setenv("XAI_API_KEY", "xai-api-secret")
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "no-login"))
+    monkeypatch.setattr(xai.urllib.request, "urlopen",
+                        lambda request, *, timeout: _GrokResponse(request, api))
+    gen.generate_image("grok", "x", tmp_path / "grok.png")
+    notice = [line for line in capsys.readouterr().err.splitlines() if "per-call API charge" in line]
+    assert len(notice) == 1 and "XAI_API_KEY" in notice[0]
 
 
 def test_cli_accepts_provider_and_quality(tmp_path, api):

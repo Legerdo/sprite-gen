@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,6 +90,21 @@ def provider_binary(name: str) -> str:
     failure instead of introducing a second availability answer here.
     """
     return shutil.which(name) or name
+
+
+def announce_api_billing(provider: str, env_name: str, detail: str = "") -> None:
+    """Say on stderr, before the request leaves, that this call bills API credit.
+
+    sprite-gen is a subscription-first tool: codex runs on a ChatGPT login and
+    grok prefers its Grok login. A route that instead spends metered API credit
+    is never silent about it, because the person paying only finds out otherwise
+    on the invoice (수홍 2026-09-20, 구독 우선 불변식 5).
+    """
+    print(
+        f"[gen] {provider}: running on {env_name} — this is a per-call API charge, "
+        f"not a subscription{detail}",
+        file=sys.stderr,
+    )
 
 
 def verify_png(path: Path) -> int:

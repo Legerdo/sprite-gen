@@ -11,6 +11,12 @@ codex and openai reach the same family of GPT image models by different routes:
 codex needs an interactive ChatGPT login and the `codex` CLI on PATH, openai needs
 only an API key, which is what a headless container (Modal worker, CI) can have.
 
+sprite-gen is subscription-first (수홍 2026-09-20). openai exists for servers and
+SaaS and is billed per call, so it runs ONLY when `--provider openai` names it: it
+is never a default, never a saved preference, never an offered choice in the guided
+flow, and never the target of an availability fallback. Having OPENAI_API_KEY in
+the environment changes no route by itself.
+
 Transparency is a per-provider strategy (`Provider.transparency`, declared once
 in each adapter): codex `image_gen` and openai (`background: transparent`) return a
 genuinely transparent PNG when asked (`native`), grok Imagine cannot and is keyed
@@ -72,6 +78,10 @@ ALPHA_MODES = (ALPHA_MODE_AUTO, *TRANSPARENCY_STRATEGIES)
 # explicitly named provider that is down fails loud at generation time.
 DEFAULT_PROVIDER_ENV = "SPRITE_GEN_DEFAULT_PROVIDER"
 HARD_DEFAULT_PROVIDER = "codex"
+# Providers that may be reached without being named. A per-call API-billed backend
+# is not one of them: it is explicit-only, so no default, preference or fallback
+# can route a subscription user onto metered credit (구독 우선 불변식 1-2).
+EXPLICIT_ONLY_PROVIDERS = ("openai",)
 _CODEX_PROBE_TIMEOUT_SECONDS = 15
 
 
@@ -160,6 +170,10 @@ def resolve_default_provider() -> tuple[str, dict[str, str] | None]:
     resolved default is codex but codex is unavailable, fall back to grok and return
     fallback metadata (from/to/reason/default_source) so the switch is observable.
     Returns (provider, fallback_or_None).
+
+    An EXPLICIT_ONLY provider can never come out of here: not as the hard default,
+    not out of the env, and not as a fallback target. A codex outage reaches grok
+    (another subscription route) or nothing at all — never metered API credit.
     """
     configured = os.environ.get(DEFAULT_PROVIDER_ENV, "").strip()
     if configured:
@@ -168,13 +182,21 @@ def resolve_default_provider() -> tuple[str, dict[str, str] | None]:
                 f"gen: {DEFAULT_PROVIDER_ENV}={configured!r} is not a known provider; "
                 f"expected one of {', '.join(PROVIDERS)}"
             )
+        if configured in EXPLICIT_ONLY_PROVIDERS:
+            raise SystemExit(
+                f"gen: {DEFAULT_PROVIDER_ENV}={configured!r} is refused — {configured} bills per call "
+                f"against an API key and must be named explicitly (`--provider {configured}`), never "
+                f"stood up as a default. Use {', '.join(p for p in PROVIDERS if p not in EXPLICIT_ONLY_PROVIDERS)} "
+                "for a subscription route."
+            )
         default, source = configured, DEFAULT_PROVIDER_ENV
     else:
         default, source = HARD_DEFAULT_PROVIDER, "hard-default"
 
-    # The availability-driven fallback is codex -> grok only (the mandated default).
-    # A grok default that is down fails loud at generation time rather than silently
-    # reverse-falling-back to codex.
+    # The availability-driven fallback is codex -> grok only (the mandated default):
+    # one subscription route to another, never to a per-call API key. A grok default
+    # that is down fails loud at generation time rather than silently reverse-falling
+    # back to codex.
     if default == "codex":
         ok, reason = _codex_available()
         if not ok:
@@ -410,7 +432,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             f"generation backend; default resolves via {DEFAULT_PROVIDER_ENV} env "
-            "then codex, with an observable grok fallback if codex is unavailable"
+            "then codex, with an observable grok fallback if codex is unavailable. "
+            "codex and grok run on a subscription login; openai is for servers and SaaS "
+            "and is billed per call on OPENAI_API_KEY, so it runs only when named here"
         ),
     )
     parser.add_argument("--prompt")

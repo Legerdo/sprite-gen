@@ -14,6 +14,12 @@ transparent|opaque|auto and transparency needs `output_format` png or webp, and 
 custom `size` must have both sides divisible by 16, an aspect ratio within
 1:3..3:1, and a total pixel count between 655,360 and 8,294,400.
 
+This backend is for servers and SaaS and is billed per call, so sprite-gen keeps it
+explicit-only (구독 우선 불변식, 수홍 2026-09-20): it runs when `--provider openai`
+names it and never as a default, a saved preference, a guided-flow option or a
+fallback target, and every call announces the charge on stderr before it leaves.
+Personal use belongs on a subscription provider (`codex`, `grok`).
+
 This provider never falls back to codex, to another key, or to a retry: a missing
 credential, a rejected key or a failed request is the observable outcome.
 """
@@ -39,6 +45,7 @@ from .base import (
     TRANSPARENCY_NATIVE,
     GenRequest,
     ProviderRun,
+    announce_api_billing,
     publish_png,
 )
 
@@ -242,6 +249,11 @@ class OpenAIProvider:
             endpoint = "/images/generations"
             data, content_type = _json_request(fields)
         token = resolve_credential()
+        announce_api_billing(
+            self.name,
+            AUTH_ENV,
+            f" (model={fields['model']}, quality={fields['quality']}, size={fields['size']}).",
+        )
         started = time.monotonic()
         status, reply = http_image(API_BASE + endpoint, token, data, content_type, timeout=GEN_TIMEOUT_SECONDS)
         if status in (401, 403):
