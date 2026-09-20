@@ -170,7 +170,13 @@ def test_detect_cycle_finds_the_full_period_not_the_half_or_1_5x(tmp_path: Path)
     cycle = loop_mod.detect_cycle(D, min_len=4, max_len=40)
     assert cycle["period_global"] == 12
     assert cycle["length"] in (11, 12, 13)
-    assert cycle["ratio"] < 1.0
+    # The cut closes exactly: the frame that would come next IS the frame it jumps back to.
+    assert cycle["next_frame_distance"] == pytest.approx(0.0, abs=1e-6)
+    # `ratio` scores the step that actually plays at the wrap, so it is a step of this
+    # cycle and not a number that shrinks toward zero. The fixture's leg is a rounded
+    # sine, which makes its own steps lumpy (1.50 1.20 0.32 0.32 1.20 1.50 ... x the mean),
+    # so the closest any cut can put the wrap to an average step here is ~1.2.
+    assert 0.9 < cycle["ratio"] < 1.6
 
 
 def test_detect_cycle_refuses_empty_window() -> None:

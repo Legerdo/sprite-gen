@@ -173,7 +173,10 @@ was 17). `video-loop` therefore:
    *smallest* local minimum that is within 15 % of the deepest one — exact repeats dip
    again at 2× and 3× the period, the half-period look-alike dips noticeably less;
 3. only then picks the **start** with the best seam for that period (± 1 frame):
-   `seam = D[i][i+L]` over the mean adjacent distance inside the cycle.
+   `seam = D[i+L-1][i]` over the mean adjacent distance inside the cycle.
+   Choose the ratio closest to 1 in log space, so a repeated pose at the wrap does
+   not win just because its distance is small. `next_frame_distance` retains the
+   distance to the frame after the cycle for diagnostics.
 
 Windows come from the state profile (`STATE_PROFILES`). **Gait states take theirs in
 seconds**, because a stride is a fact about the body, not about the clip length: walk

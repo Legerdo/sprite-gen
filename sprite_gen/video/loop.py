@@ -186,17 +186,24 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
                 guard = {"applied": False, "below_floor": period, "gait_floor": gait_floor, "why": "the doubled period repeats too much worse to be the same gait"}
     profile_mean = float(np.mean([prof[L] for L in prof]))
     periodicity = (profile_mean - prof[period]) / profile_mean if profile_mean > 0 else 0.0
+    # Score the last displayed frame -> first frame transition against an ordinary
+    # playback step. Minimising distance alone rewards a repeated pose (a stall).
+    # Log distance penalises steps that are too short or too long symmetrically.
     best: dict[str, Any] | None = None
     for L in (period - 1, period, period + 1):
         if L < min_len or L > max_len:
             continue
         for i in range(0, n - L):
-            seam = float(D[i, i + L])
+            seam = float(D[i + L - 1, i])
             inner = float(adjacent[i : i + L - 1].mean())
             ratio = seam / inner if inner > 0 else math.inf
-            if best is None or ratio < best["ratio"]:
-                best = {"start": i, "length": L, "seam": seam, "inner_mean_adjacent": inner, "ratio": ratio}
+            score = abs(math.log(ratio)) if ratio > 0 else math.inf
+            if best is None or score < best["wrap_score"]:
+                best = {"start": i, "length": L, "seam": seam, "inner_mean_adjacent": inner,
+                        "ratio": ratio, "wrap_score": score,
+                        "next_frame_distance": float(D[i, i + L]) if i + L < n else None}
     assert best is not None
+    best.pop("wrap_score")
     best["period_global"] = period
     best["half_period_guard"] = guard
     best["periodicity"] = round(periodicity, 4)  # how far below the profile mean the period dips (0 = flat = no period)
