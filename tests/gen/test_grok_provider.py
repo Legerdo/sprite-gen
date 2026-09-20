@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 
 from sprite_gen import gen
+from sprite_gen.gen import base as gen_base
 from sprite_gen.gen import grok_provider as grok, xai
 from sprite_gen.gen.base import GenRequest
 from sprite_gen.workflow import access, guide
@@ -208,3 +209,105 @@ def test_guide_prefers_subscription_without_api_billing_question(tmp_path, api, 
     assert all(item["billing"] == "subscription" for item in result["access"])
     assert not any(question["field"] == "confirm_api_billing" for question in result["questions"])
     assert api["calls"] == []
+
+
+def _sent(api, index=0):
+    return json.loads(api["calls"][index][0].data)
+
+
+@pytest.mark.parametrize("resolution", grok.SUPPORTED_RESOLUTIONS)
+@pytest.mark.parametrize("quality", grok.SUPPORTED_QUALITIES)
+def test_every_priced_level_reaches_the_request_and_the_report(tmp_path, api, quality, resolution):
+    """The two knobs Imagine prices on arrive verbatim — no normalising, no default."""
+    result = gen.generate_image("grok", "x", tmp_path / f"{quality}-{resolution}.png",
+                                quality=quality, resolution=resolution)
+    body = _sent(api)
+    assert body["quality"] == quality and body["resolution"] == resolution
+    assert result.extra["quality"] == quality and result.extra["resolution"] == resolution
+
+
+def test_asking_for_neither_leaves_the_request_and_report_as_they_were(tmp_path, api):
+    result = gen.generate_image("grok", "x", tmp_path / "out.png")
+    body = _sent(api)
+    assert "quality" not in body and "resolution" not in body
+    # The service default (`auto` = low here, medium on edits) is the service's to
+    # name; the report does not invent a level that was never requested.
+    assert "quality" not in result.extra and "resolution" not in result.extra
+
+
+@pytest.mark.parametrize("options, expected", [
+    ({"quality": "high"}, "openai"),
+    ({"quality": "xhigh"}, "openai"),
+    ({"quality": "max"}, "openai"),
+    ({"quality": "bogus"}, "openai"),
+    ({"resolution": "4k"}, "1.5k"),
+    ({"resolution": "1024"}, "1.5k"),
+    ({"resolution": "1K"}, "1.5k"),
+])
+def test_a_level_grok_cannot_serve_fails_before_upload(tmp_path, api, options, expected):
+    with pytest.raises(SystemExit) as error:
+        grok.GrokProvider().generate(GenRequest("x", tmp_path / "raw.png", **options), tmp_path)
+    message = str(error.value)
+    assert next(iter(options.values())) in message and expected in message
+    assert api["calls"] == []
+
+
+def test_an_edit_carries_the_knobs_too(tmp_path, api):
+    ref = tmp_path / "ref.png"
+    Image.new("RGB", (12, 8), (0, 0, 200)).save(ref)
+    gen.generate_image("grok", "x", tmp_path / "edit.png", refs=[ref], quality="medium", resolution="2k")
+    request, _ = api["calls"][0]
+    assert request.full_url.endswith("/images/edits")
+    assert _sent(api)["quality"] == "medium" and _sent(api)["resolution"] == "2k"
+
+
+def test_the_api_key_notice_names_what_the_image_is_priced_on(tmp_path, api, capsys):
+    """불변식 5: 2k medium bills twice 1k low, so the charge line says which one left."""
+    gen.generate_image("grok", "x", tmp_path / "out.png", quality="medium", resolution="2k")
+    notice = [line for line in capsys.readouterr().err.splitlines() if "per-call API charge" in line]
+    assert len(notice) == 1
+    assert "quality=medium" in notice[0] and "resolution=2k" in notice[0]
+    # The shared prefix already denies the subscription once; the grok detail adds
+    # the remedy, not a second denial (2026-09-20 실측 on the live XAI_API_KEY run:
+    # the line read "not a subscription (...), not your Grok subscription — ...").
+    assert notice[0].count("not ") == 1
+    assert "`grok login` signs your Grok subscription in." in notice[0]
+
+
+def test_the_subscription_route_stays_silent_about_billing(tmp_path, api, monkeypatch, capsys):
+    _subscription_login(tmp_path, monkeypatch)
+    gen.generate_image("grok", "x", tmp_path / "out.png", quality="low", resolution="1k")
+    assert "per-call API charge" not in capsys.readouterr().err
+    assert _sent(api)["quality"] == "low"
+
+
+@pytest.mark.parametrize("model, scoped", [("grok-2-image", True), (None, False)])
+def test_a_rejected_request_names_the_model_the_knobs_are_documented_for(tmp_path, api, model, scoped):
+    """docs.x.ai scopes quality/resolution to grok-imagine-image-2.0; a 400 on another
+    model should say so instead of leaving the caller with a bare status code."""
+    api.update(status=400, body={"error": "synthetic-secret https://signed.invalid/private"})
+    with pytest.raises(SystemExit, match="HTTP 400") as error:
+        gen.generate_image("grok", "x", tmp_path / "out.png", model=model, quality="low", resolution="2k")
+    message = str(error.value)
+    assert ("quality=low, resolution=2k" in message and grok.DEFAULT_MODEL in message) is scoped
+    assert "synthetic-secret" not in message
+
+
+def test_cli_carries_quality_and_resolution_into_the_body(tmp_path, api):
+    assert gen.main(["--provider", "grok", "--prompt", "x", "--out", str(tmp_path / "cli.png"),
+                     "--quality", "low", "--resolution", "1.5k"]) == 0
+    assert _sent(api)["quality"] == "low" and _sent(api)["resolution"] == "1.5k"
+
+
+def test_the_declared_subsets_are_the_servers_own_enums():
+    """Pinned to what the live API answered on 2026-09-20, which is not what either
+    doc page says on its own: `high` deserializes but the model refuses it with
+    HTTP 400, and `1.5k` renders although the capability guide omits it. Widening
+    or narrowing these needs a fresh probe, not a doc reading — the service ignores
+    a field it does not know instead of refusing it."""
+    assert grok.SUPPORTED_QUALITIES == ("auto", "low", "medium")
+    assert grok.SUPPORTED_RESOLUTIONS == ("1k", "1.5k", "2k")
+    # Both live inside the shared CLI vocabulary, so every level grok declares is
+    # one `--quality` / `--resolution` can actually pass in.
+    assert set(grok.SUPPORTED_QUALITIES) <= set(gen_base.QUALITIES)
+    assert set(grok.SUPPORTED_RESOLUTIONS) <= set(gen_base.RESOLUTIONS)

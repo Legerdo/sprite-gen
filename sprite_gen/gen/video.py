@@ -21,7 +21,9 @@ resolved in a fixed order and always reported (`auth_source`):
 
 1. the grok CLI login file `~/.grok/auth.json` (SuperGrok Imagine quota via the
    OIDC access token the CLI stored at `grok login`). `GROK_HOME` relocates it.
-2. `XAI_API_KEY` - an xAI console key, only when no grok login file exists.
+2. `XAI_API_KEY` - an xAI console key, only when no grok login file exists. That
+   route spends metered API credit, so it says so on stderr before it uploads;
+   the subscription route stays silent (구독 우선 불변식 5, 수홍 2026-09-20).
 
 The login token expires (about six hours, 2026-09-08 실측) and the grok CLI is the
 only writer of that file, so an expired token is not refreshed here: the run
@@ -53,6 +55,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from sprite_gen.spec.runio import atomic_write_text
+from .base import announce_api_billing
 from .xai import (
     API_BASE, AUTH_ENV, AUTH_SOURCE_API_KEY, AUTH_SOURCE_GROK_LOGIN,
     HTTP_TIMEOUT_SECONDS, GROK_REFRESH_COMMAND, GROK_REFRESH_WHERE, GROK_LOGIN_COMMAND,
@@ -365,7 +368,21 @@ def _submit_poll_publish(
 
     `accept(staged_path, final_poll)` may refuse the clip (raise SystemExit) while it is
     still the `.part` file — `video-extend` measures the staged bytes with ffprobe; the
-    staged file is removed and `out` is never written."""
+    staged file is removed and `out` is never written.
+
+    Every billed request leaves from here, which is why the API-credit notice lives
+    here too: one line per submitted job, whichever verb asked for it."""
+    if credential.source == AUTH_SOURCE_API_KEY:
+        # Reaching the key means no grok login exists (resolve_credential's fixed
+        # order), so this clip spends metered API credit instead of the Imagine
+        # subscription quota. What sets the amount travels with the charge: Imagine
+        # prices a clip by length x output size, so a 15 s 1080p clip is nothing
+        # like a 3 s 480p one (`video-edit` sends neither and names neither).
+        priced = ", ".join(f"{knob}={body[knob]}{'s' if knob == 'duration' else ''}"
+                           for knob in ("duration", "resolution") if knob in body)
+        announce_api_billing(verb, AUTH_ENV,
+                             f"{f' ({priced})' if priced else ''} — "
+                             f"`{GROK_LOGIN_COMMAND}` signs your Grok subscription in.")
     started = time.monotonic()
     status, reply = call("POST", f"{API_BASE}/videos/{endpoint}", credential.token, body)
     if status in (401, 403):

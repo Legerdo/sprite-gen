@@ -296,6 +296,15 @@ class CodexProvider:
         self.keep_session = keep_session
 
     def generate(self, request: GenRequest, workdir: Path) -> ProviderRun:
+        # `image_gen` exposes no effort or size dial, so neither knob is carried
+        # into the prompt. Refusing beats returning a default-effort image under a
+        # level the caller chose and believes they got (No Silent Fallback).
+        for flag, value in (("--quality", request.quality), ("--resolution", request.resolution)):
+            if value is not None:
+                raise SystemExit(
+                    f"codex-gen: {flag} is not carried into codex image_gen; "
+                    "drop it or use --provider openai"
+                )
         codex_home = _resolve_codex_home()
         if not codex_home.is_dir():
             raise SystemExit(

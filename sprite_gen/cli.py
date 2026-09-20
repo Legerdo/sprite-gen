@@ -293,7 +293,7 @@ COMMANDS: dict[str, tuple[str, Callable[[argparse.ArgumentParser], None], Callab
         slice_sheet.run,
     ),
     "gen": (
-        "Generate one image via a provider (codex image_gen / grok Imagine) into a verified PNG.",
+        "Generate one image via a provider (codex image_gen / grok Imagine on a subscription login, or openai Images API for servers/SaaS, billed per call) into a verified PNG.",
         _add_gen,
         gen.run,
     ),
