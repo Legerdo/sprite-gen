@@ -141,7 +141,7 @@ The still the clip was made from settles it. `video-frames --spill` takes:
 |---|---|
 | `small` (default) | only small key-tinted clusters — the still pipeline's rule, byte-identical output |
 | `full` | key-tinted clusters of any size, including faint tints (colour only: alpha is unchanged) |
-| `auto` | keys `--reference` (the still) with the same matte and counts its key-tinted pixels at the same threshold used by `full`; a share ≤ 0.5 % means the still has no key-coloured material of its own → `full`, otherwise `small` |
+| `auto` | keys `--reference` (the still) with the same matte and counts its interior key-hued pixels at the same threshold used by `full`; a share ≤ 0.5 % means the still has no key-coloured material of its own → `full`, otherwise `small` |
 
 `video-set` passes `--spill auto` with each item's `canvas.png` as the reference (override
 with `--spill small|full`), so a green-free character loses the reflections while a
@@ -149,8 +149,25 @@ character that *is* green keeps its colour. The decision and its numbers are rec
 the frames report under `spill`. The correction is the engine's own `despill_color` blend
 model (observed = (1−k)·subject + k·key, solved for the subject), so colours without key
 tint are untouched. `small` keeps the conservative tint threshold of 40; `full` lowers it to 8.
-The `auto` reference check also uses 8, so faint key-coloured material in the
-original character keeps the conservative correction.
+For `full`, a key hue requires every keyed channel to exceed every non-keyed
+channel: `G − max(R, B)` for green, `min(R, B) − G` for magenta. This same
+excess selects pixels for correction and drives the `auto` reference check, so yellow/cyan
+are not mistaken for green, or red/blue for magenta. The average-channel tint
+metric remains unchanged in `small` and the edge matte.
+
+The blend fraction still uses the linear average-channel tint, not hue excess.
+Full correction recovers mean brightness but does not amplify colour differences
+within the keyed or non-keyed channel group. Otherwise a small red/blue imbalance
+can become a strong secondary cast when much of the observed colour is key light.
+This is bounded colour recovery, not reconstruction of the original material:
+blue or purple already present without the key hue remains unchanged.
+
+The `auto` reference test discounts dark pixels (all channels below 64) in the
+matte's 4-pixel edge-unmix band. Such contamination along an antialiased outline
+is weak evidence of an intentional material. Bright green/magenta accents still
+count even on an edge. The report names the metric, band and dark-only policy.
+Genuine key-coloured material above the 0.5% share still keeps the conservative
+mode. Tiny accents or dark, edge-only material can fall below that reference test; use `--spill small` when preserving those is essential.
 
 ## 3b. Canvas shape for raised limbs and wide costumes
 
