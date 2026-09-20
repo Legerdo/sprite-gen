@@ -264,7 +264,9 @@ def load_asset(source: Path, *, state=None, fps=None, anchor=None) -> FrameSeque
                 raise ValueError("loop strip size disagrees with its sidecar")
             frames = [sheet.crop((i*w, 0, (i+1)*w, h)) for i in range(n)]
             durations = [finite(data["delay_ms"], "delay_ms", positive=True)/1000] * n
-            meta["loop"] = True
+            # `video-loop` writes `loop: false` for a one-shot cut (rest -> action -> rest);
+            # an older sidecar without the key is a loop, as every strip was before.
+            meta["loop"] = bool(data.get("loop", True))
         else:
             raise ValueError("unsupported asset descriptor; use sprite-gen-asset, loop strip sidecar or atlas manifest")
     if not frames:

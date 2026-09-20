@@ -2,6 +2,13 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## v2.4.0 - Three-second clips and gait windows in seconds
+
+- `video-set --duration` defaults to 3 seconds (was 6). A repeating motion holds two or more cycles at 3 s (walk strides measured at 0.6–1.3 s across seven bodies), a single action is one hop or swing that the one-shot cut already handles, and 6 s bought only a longer wait — and, for jump, more idle standing between hops. `--duration 6` still asks for a longer clip.
+- `video-loop` walk and run take their period window in seconds (walk 0.5–1.6 s, run 0.3–1.2 s, capped at half the clip) instead of a fraction of the clip length. At 3 s the old 6–31 % window topped out at 0.96 s and put a 1.0–1.3 s stride out of reach: on four walks generated at 3 s it refused one outright and cut another at a half step; with the bounds in seconds all four pass with equal or better seams, and the 6 s results are unchanged. Idle, jump and attack keep their windows.
+- The strip sidecar (`<name>.strip.json`) records `kind` (`periodic` / `one-shot` / `fixed`) and `loop` (`false` for a one-shot), and the spec asset loader reads `loop` from it, so a jump or attack cut as a single action plays once on a trigger instead of repeating. A sidecar without the key is a loop, as before.
+- The GIF/WebP never ask for more frames than the strip has cells. A cycle longer than the 64-cell cap is subsampled into the strip; the GIF/WebP are cut from those cells, so requesting the cycle length repeated cells back to back, the writer merged the identical neighbours, and verification refused its own output ("64 frames, expected 68" on a 2.8 s jump cycle).
+
 ## v2.3.1 - Key reflections removed from video sprites
 
 - `video-frames --spill small|full|auto` and `video-set --spill` (default `auto`): remove the key colour a video model paints into the subject — a reflection across metal, a tint on a pale surface — which the chroma engine's trapped-spill pass leaves alone once the patch is larger than its small-cluster cap. `auto` keys the still the clip was made from and measures its own key-coloured material; none worth the name means every key tint in the clip is spill (`full`), otherwise the still-pipeline rule stays (`small`). Colour only — alpha is unchanged — and colours without key tint are untouched. `video-frames` defaults to `small`, byte-identical to before; the frames report records the decision under `spill`.
