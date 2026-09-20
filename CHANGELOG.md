@@ -2,6 +2,10 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## Unreleased (v2.4.1)
+
+- `video-loop` one-shot detection no longer refuses a visible hop because the rest pose is not one pose. The excursion is admitted by either the peak's height in MADs of the rest noise (as before) or the fraction of the subject's pixel mass the peak moves (new, ≥ 0.4); the report records `excursion_moved` and `excursion_rule`. A body that walked a few steps, hopped 42 px and froze scored 1.8 MADs because the walking preamble and the frozen tail inflate the "rest noise"; by moved mass it scores 1.07. A jittering stand still fails both rules, and clips the MAD rule already accepted are cut exactly as before.
+
 ## v2.4.0 - Three-second clips and gait windows in seconds
 
 - `video-set --duration` defaults to 3 seconds (was 6). A repeating motion holds two or more cycles at 3 s (walk strides measured at 0.6–1.3 s across seven bodies), a single action is one hop or swing that the one-shot cut already handles, and 6 s bought only a longer wait — and, for jump, more idle standing between hops. `--duration 6` still asks for a longer clip.
