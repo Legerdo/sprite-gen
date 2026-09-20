@@ -362,19 +362,27 @@ _IN_BAND_UNMIX_KEY_DEPTH = 2
 # channel clears every unkeyed channel by >40): warm subject colors (skin)
 # score a marginal tint just above fringe_delta and must not be "corrected".
 _SPILL_MIN_TINT = 40.0
+# Full correction also admits faint key tints. Auto mode must inspect the
+# reference at this same threshold before choosing full correction.
+_SPILL_FULL_MIN_TINT = 8.0
 
 
-def key_material_pixels(image: Image.Image, chroma_key: tuple[int, int, int]) -> tuple[int, int]:
-    """Opaque pixels that are strongly key-tinted (the trapped-spill bar, `_SPILL_MIN_TINT`),
-    and all opaque pixels, of an already keyed RGBA image. A still that has almost none
-    carries no key-coloured material of its own."""
+def key_material_pixels(image: Image.Image, chroma_key: tuple[int, int, int],
+                        min_tint: float = _SPILL_MIN_TINT) -> tuple[int, int]:
+    """Opaque pixels that are key-tinted past `min_tint` (the trapped-spill bar), and all
+    opaque pixels, of an already keyed RGBA image. A still that has almost none carries no
+    key-coloured material of its own.
+
+    The bar is a parameter because the decision and the treatment have to read the same
+    one: judging a reference at 40 and then despilling it down to 8 would call a subject
+    with a mild green of its own "no key material" and then scrub that green away."""
     keyed_channels, unkeyed_channels = _key_channel_split(chroma_key)
     data = np.asarray(image.convert("RGBA")).astype(np.int32)
     opaque = data[..., 3] > 0
     if not keyed_channels:
         return 0, int(opaque.sum())
     tint = _key_tint_field(data[..., :3], keyed_channels, unkeyed_channels)
-    return int((opaque & (tint > _SPILL_MIN_TINT)).sum()), int(opaque.sum())
+    return int((opaque & (tint > min_tint)).sum()), int(opaque.sum())
 
 
 def remove_chroma_background(
@@ -386,6 +394,7 @@ def remove_chroma_background(
     *,
     unmix_reach: int = 4,
     spill_max_fraction: float = 0.005,
+    spill_min_tint: float = _SPILL_MIN_TINT,
     background_key: tuple[int, int, int] | None = None,
 ) -> Image.Image:
     """Key `chroma_key` out of `image` (hard cut + soft-alpha fringe unmix + trapped-spill despill).
@@ -520,8 +529,13 @@ def remove_chroma_background(
         # the image, and a pixel it despilled is no longer a spill candidate.
         current_tint = _key_tint_field(data[..., :3].astype(np.int32),
                                        keyed_channels, unkeyed_channels)
+        # Candidacy and acceptance read the same bar: a cluster can never be accepted
+        # below `spill_min_tint`, so admitting only pixels at or above `fringe_delta`
+        # would silently keep the lowered bar from reaching anything when it is the
+        # smaller of the two.
+        candidate_tint = min(fringe_delta, spill_min_tint)
         candidates = np.flatnonzero(
-            ((data[..., 3] != 0) & (current_tint >= fringe_delta)).reshape(-1)
+            ((data[..., 3] != 0) & (current_tint >= candidate_tint)).reshape(-1)
         )
         tints_left: dict[int, float] = dict(
             zip(candidates.tolist(), current_tint.reshape(-1)[candidates].tolist())
@@ -547,7 +561,7 @@ def remove_chroma_background(
                                 stack.append(neighbor)
             if len(cluster) > spill_limit:
                 continue
-            if max(tints_left[index] for index in cluster) <= _SPILL_MIN_TINT:
+            if max(tints_left[index] for index in cluster) <= spill_min_tint:
                 continue
             for index in cluster:
                 x = index % width

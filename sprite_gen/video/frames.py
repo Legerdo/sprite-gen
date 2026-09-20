@@ -33,6 +33,7 @@ from PIL import Image
 
 from sprite_gen.frames.cutout import cutout
 from sprite_gen.frames.extract import is_border_key_candidate
+from sprite_gen.frames.extract import _SPILL_FULL_MIN_TINT
 from sprite_gen.spec.runio import atomic_write_text
 
 EDGE_ROWS = 4  # rows/cols inspected at each edge
@@ -44,6 +45,7 @@ EDGE_ROWS = 4  # rows/cols inspected at each edge
 # key tint in the clip was painted by the model and is spill.
 SPILL_MODES = ("auto", "small", "full")
 SPILL_FULL_FRACTION = 1.0  # every tinted cluster is spill, whatever its size
+SPILL_FULL_MIN_TINT = _SPILL_FULL_MIN_TINT  # ... and whatever its strength (see extract.py)
 SPILL_REFERENCE_MAX = 0.005  # the still's own key material ≤ the engine's small-cluster share → full
 EDGE_MAX_PIXELS = 0  # any opaque pixel on the top/left/right edge band = contact
 
@@ -135,7 +137,9 @@ def decide_spill(reference: Path, key: str) -> dict[str, Any]:
     if kind not in ("green", "magenta"):
         return {"mode": "small", "reference": str(reference), "reason": f"key {kind!r} has no spill pass"}
     keyed, _ = extract_route(image, kind)
-    material, subject = key_material_pixels(keyed, KEY_TARGETS[kind])
+    # judged at the bar `full` would treat with, so a subject that owns a mild key tint
+    # is not first called "no key material" and then scrubbed of it
+    material, subject = key_material_pixels(keyed, KEY_TARGETS[kind], SPILL_FULL_MIN_TINT)
     share = material / subject if subject else 0.0
     mode = "full" if share <= SPILL_REFERENCE_MAX else "small"
     return {"mode": mode, "reference": str(reference), "key": kind, "key_material_px": material,
@@ -152,13 +156,15 @@ def key_frames(
 ) -> dict[str, Any]:
     if spill not in ("small", "full"):
         raise SystemExit(f"video-frames: key_frames takes a resolved spill mode (small|full), got {spill!r}")
+    # Full correction lowers the tint threshold as well as lifting the size cap.
     spill_max = SPILL_FULL_FRACTION if spill == "full" else None
+    spill_tint = SPILL_FULL_MIN_TINT if spill == "full" else None
     keyed_dir.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
     contacts: list[dict[str, Any]] = []
     for src in raw_files:
         dst = keyed_dir / src.name
-        stats = cutout(src, dst, key=key, spill_max_fraction=spill_max)
+        stats = cutout(src, dst, key=key, spill_max_fraction=spill_max, spill_min_tint=spill_tint)
         image = Image.open(dst).convert("RGBA")
         hist = image.getchannel("A").histogram()
         w, h = image.size

@@ -140,16 +140,17 @@ The still the clip was made from settles it. `video-frames --spill` takes:
 | Mode | What is corrected |
 |---|---|
 | `small` (default) | only small key-tinted clusters — the still pipeline's rule, byte-identical output |
-| `full` | every key-tinted cluster, whatever its size (colour only: alpha is unchanged) |
-| `auto` | keys `--reference` (the still) with the same matte and counts its strongly key-tinted pixels; a share ≤ 0.5 % means the still has no key-coloured material of its own → `full`, otherwise `small` |
+| `full` | key-tinted clusters of any size, including faint tints (colour only: alpha is unchanged) |
+| `auto` | keys `--reference` (the still) with the same matte and counts its key-tinted pixels at the same threshold used by `full`; a share ≤ 0.5 % means the still has no key-coloured material of its own → `full`, otherwise `small` |
 
 `video-set` passes `--spill auto` with each item's `canvas.png` as the reference (override
 with `--spill small|full`), so a green-free character loses the reflections while a
 character that *is* green keeps its colour. The decision and its numbers are recorded in
 the frames report under `spill`. The correction is the engine's own `despill_color` blend
 model (observed = (1−k)·subject + k·key, solved for the subject), so colours without key
-tint are untouched. Faint tints whose cluster never crosses the strong-tint bar are left
-as they are.
+tint are untouched. `small` keeps the conservative tint threshold of 40; `full` lowers it to 8.
+The `auto` reference check also uses 8, so faint key-coloured material in the
+original character keeps the conservative correction.
 
 ## 3b. Canvas shape for raised limbs and wide costumes
 
@@ -173,7 +174,10 @@ was 17). `video-loop` therefore:
    *smallest* local minimum that is within 15 % of the deepest one — exact repeats dip
    again at 2× and 3× the period, the half-period look-alike dips noticeably less;
 3. only then picks the **start** with the best seam for that period (± 1 frame):
-   `seam = D[i][i+L]` over the mean adjacent distance inside the cycle.
+   `seam = D[i+L-1][i]` over the mean adjacent distance inside the cycle.
+   Choose the ratio closest to 1 in log space, so a repeated pose at the wrap does
+   not win just because its distance is small. `next_frame_distance` retains the
+   distance to the frame after the cycle for diagnostics.
 
 Windows come from the state profile (`STATE_PROFILES`). **Gait states take theirs in
 seconds**, because a stride is a fact about the body, not about the clip length: walk
@@ -191,6 +195,16 @@ The ceiling is a bound in seconds rather than simply "half the clip" because the
 periodicity gate measures the period's dip against the profile mean over the whole
 window, and a ceiling that grows with the clip inflates that mean until a single hop
 in a jittering stand passes as a walk.
+
+For gait states, a duration above the floor is not proof that both phases are present.
+If a local minimum near twice the chosen period is within the existing 25 % repeat-error
+tolerance and still passes the periodicity gate, the detector retains the longer candidate
+once, inside the requested window. Near-exact repeats (repeat error at most 10 % of an
+ordinary adjacent step) stay short. This is a conservative response to ambiguous harmonics:
+a genuine short gait may be shown twice, at the same source speed. It does not identify
+anatomical left/right contacts. The report records `half_period_guard.reason =
+"ambiguous-harmonic"` and `cycle.review_recommended = true`. See [loop review](loop-review.md)
+for the visual review contract and manual overrides.
 
 Gates, all fail-loud: no period (profile flat, `periodicity < 0.15`), loop seam ratio
 above `--seam-max` (2.0), GIF/WebP re-opened and checked (frame count, `loop=0`,

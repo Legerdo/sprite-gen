@@ -170,7 +170,13 @@ def test_detect_cycle_finds_the_full_period_not_the_half_or_1_5x(tmp_path: Path)
     cycle = loop_mod.detect_cycle(D, min_len=4, max_len=40)
     assert cycle["period_global"] == 12
     assert cycle["length"] in (11, 12, 13)
-    assert cycle["ratio"] < 1.0
+    # The cut closes exactly: the frame that would come next IS the frame it jumps back to.
+    assert cycle["next_frame_distance"] == pytest.approx(0.0, abs=1e-6)
+    # `ratio` scores the step that actually plays at the wrap, so it is a step of this
+    # cycle and not a number that shrinks toward zero. The fixture's leg is a rounded
+    # sine, which makes its own steps lumpy (1.50 1.20 0.32 0.32 1.20 1.50 ... x the mean),
+    # so the closest any cut can put the wrap to an average step here is ~1.2.
+    assert 0.9 < cycle["ratio"] < 1.6
 
 
 def test_detect_cycle_refuses_empty_window() -> None:
@@ -455,7 +461,7 @@ def test_run_set_staggers_retries_429_and_tables_failures(tmp_path: Path, monkey
     monkeypatch.setattr(batch_mod.time, "sleep", lambda s: None)  # no real backoff waits
     monkeypatch.setattr(frames_mod, "run_frames", lambda clip, out_dir, **kw: {"fps": 24.0, "frames": 10, "alpha_zero_pct_min": 60.0, "alpha_zero_pct_max": 70.0, "keyed_dir": str(out_dir / "keyed")})
     monkeypatch.setattr(batch_mod.frames_mod, "run_frames", frames_mod.run_frames)
-    monkeypatch.setattr(batch_mod.loop_mod, "run_loop", lambda frames_dir, out_dir, **kw: {"cycle": {"length": 12, "period_global": 12, "ratio": 0.3}, "resampled_seam_ratio": 0.5, "n_out": 12, "gif": {"file": "x.gif"}, "webp": {"file": "x.webp"}, "strip": {"path": "x.png"}})
+    monkeypatch.setattr(batch_mod.loop_mod, "run_loop", lambda frames_dir, out_dir, **kw: {"cycle": {"length": 12, "period_global": 12, "ratio": 0.3, "review_recommended": kw["state"] == "run"}, "resampled_seam_ratio": 0.5, "n_out": 12, "gif": {"file": "x.gif"}, "webp": {"file": "x.webp"}, "strip": {"path": "x.png"}})
 
     payload = batch_mod.run_set(bases={"side": base}, states=["walk", "run", "jump"], root=tmp_path / "set", character=None, duration=6, resolution="720p", key="green", concurrency=3, force=False, gap=0.0, video_runner=fake_video)
 
@@ -463,8 +469,11 @@ def test_run_set_staggers_retries_429_and_tables_failures(tmp_path: Path, monkey
     assert by["side-walk"]["ok"] and by["side-walk"]["clip"]["attempts"] == [0]
     assert by["side-run"]["ok"] and by["side-run"]["clip"]["attempts"] == [1, 0]  # one 429 retry
     assert not by["side-jump"]["ok"] and "clip generation failed" in by["side-jump"]["error"]
+    assert by["side-run"]["loop"]["review_recommended"] is True
+    assert by["side-walk"]["loop"]["review_recommended"] is False
     assert payload["failed"] == ["side-jump"]
     table = (tmp_path / "set" / "table.md").read_text()
     assert "| side | jump | - | - | - | - | - | FAIL" in table and "| side | walk | periodic | 12 | 12 | 0.50 | 12 | OK |" in table
+    assert "| side | run | periodic | 12 | 12 | 0.50 | 12 | OK (review gait) |" in table
     assert (tmp_path / "set" / "set.report.json").is_file()
     assert (tmp_path / "set" / "side-walk" / "canvas.png").is_file()  # canvas ran for real

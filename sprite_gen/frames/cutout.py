@@ -271,7 +271,8 @@ def _matte_route(
     }
 
 
-def extract_route(image: Image.Image, kind: str, *, spill_max_fraction: float | None = None) -> tuple[Image.Image, dict[str, Any]]:
+def extract_route(image: Image.Image, kind: str, *, spill_max_fraction: float | None = None,
+                  spill_min_tint: float | None = None) -> tuple[Image.Image, dict[str, Any]]:
     """Magenta/green key background → reuse the verified `extract` chroma engine (no drift).
 
     The engine keys from the background colour it detects on the borders
@@ -285,7 +286,11 @@ def extract_route(image: Image.Image, kind: str, *, spill_max_fraction: float | 
 
     target = KEY_TARGETS[kind]
     painted = detect_background_key_rgb(image, target)
-    extra = {} if spill_max_fraction is None else {"spill_max_fraction": spill_max_fraction}
+    extra: dict[str, float] = {}
+    if spill_max_fraction is not None:
+        extra["spill_max_fraction"] = spill_max_fraction
+    if spill_min_tint is not None:
+        extra["spill_min_tint"] = spill_min_tint
     result = remove_chroma_background(
         image, target, _EXTRACT_KEY_THRESHOLD, _EXTRACT_FRINGE_THRESHOLD, _EXTRACT_FRINGE_DELTA, **extra
     )
@@ -307,12 +312,14 @@ def cutout(
     tolerance: int = CHROMA_TOLERANCE,
     white_check_dir: Path | None = None,
     spill_max_fraction: float | None = None,
+    spill_min_tint: float | None = None,
 ) -> dict[str, Any]:
     """Cut a uniform-background imported image to a clean transparent RGBA PNG.
 
     `key`: "auto" (detect from corners) | "white" (matte) | "magenta" | "green"
     (reuse the extract chroma engine). `spill_max_fraction` overrides the chroma
-    engine's trapped-spill cluster cap (None = the engine default). Returns a stats dict. Raises SystemExit if
+    engine's trapped-spill cluster cap and `spill_min_tint` its tint bar (None = the
+    engine default for either). Returns a stats dict. Raises SystemExit if
     the key is unknown, the background cannot be located, or any transparent pixel
     keeps non-zero RGB (No Silent Fallback).
     """
@@ -324,7 +331,8 @@ def cutout(
 
     route = _detect_key_kind(_corner_average(image)) if key == "auto" else key
     if route in ("magenta", "green"):
-        result, route_stats = extract_route(image, route, spill_max_fraction=spill_max_fraction)
+        result, route_stats = extract_route(image, route, spill_max_fraction=spill_max_fraction,
+                                            spill_min_tint=spill_min_tint)
     else:
         result, route_stats = _matte_route(image, input_path, strength, band, erode, tolerance)
 
