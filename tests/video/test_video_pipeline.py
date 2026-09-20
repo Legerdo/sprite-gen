@@ -183,8 +183,9 @@ def test_profiles_scale_windows_with_clip_length() -> None:
     p = loop_mod.profile_for("idle")
     assert p.min_frac > loop_mod.profile_for("walk").min_frac
     # a 6 s / 24 fps clip: the walk floor must admit a 13-frame bounce (legless body) and the
-    # ceiling a 28-frame gait (2026-09-09: slime 13, wolf 24, biped 25 all resolved by the depth rule)
-    lo, hi = round(144 * loop_mod.profile_for("walk").min_frac), round(144 * loop_mod.profile_for("walk").max_frac)
+    # ceiling a 28-frame gait (2026-09-09: slime 13, wolf 24, biped 25 all resolved by the depth rule).
+    # Gait windows are in seconds now (floor 0.25 s, ceiling half the clip) — the same two bounds hold.
+    lo, hi = loop_mod.profile_for("walk").window(144, 24.0)
     assert lo <= 13 and hi >= 28
     assert loop_mod.profile_for("unknown-state") is loop_mod.STATE_PROFILES["default"]
 
