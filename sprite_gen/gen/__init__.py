@@ -2,20 +2,27 @@
 """Unified image generation layer for sprite-gen.
 
 Single source of truth for provider-backed image generation: codex (`image_gen`,
-ChatGPT OAuth) and grok (Imagine, xAI OAuth). One call = prompt (+ optional refs)
--> one verified raw PNG, with an optional deterministic transparent chroma
-post-process. The general `image-gen` skill is a thin shuttle over `sprite-gen gen`.
+ChatGPT OAuth), grok (Imagine, xAI OAuth) and openai (Images REST, OPENAI_API_KEY).
+One call = prompt (+ optional refs) -> one verified raw PNG, with an optional
+deterministic transparent chroma post-process. The general `image-gen` skill is a
+thin shuttle over `sprite-gen gen`.
+
+codex and openai reach the same family of GPT image models by different routes:
+codex needs an interactive ChatGPT login and the `codex` CLI on PATH, openai needs
+only an API key, which is what a headless container (Modal worker, CI) can have.
 
 Transparency is a per-provider strategy (`Provider.transparency`, declared once
-in each adapter): codex `image_gen` returns a genuinely transparent PNG when asked
-(`native`), grok Imagine cannot and is keyed out of a chroma background (`chroma`).
-`--transparent` follows the provider's strategy unless `--alpha-mode` overrides it.
+in each adapter): codex `image_gen` and openai (`background: transparent`) return a
+genuinely transparent PNG when asked (`native`), grok Imagine cannot and is keyed
+out of a chroma background (`chroma`). `--transparent` follows the provider's
+strategy unless `--alpha-mode` overrides it.
 
 CLI:
-    sprite-gen gen --provider codex|grok --prompt "..." --out DEST.png
+    sprite-gen gen --provider codex|grok|openai --prompt "..." --out DEST.png
         [--ref REF.png ...] [--transparent [--alpha-mode auto|native|chroma]
         [--chroma-key magenta|green]] [--white-check CHECK.png] [--model ID]
-        [--aspect-ratio 1:1] [--report REPORT.json] [--keep-session]
+        [--aspect-ratio 1:1] [--quality low|medium|high|xhigh|max|auto]
+        [--report REPORT.json] [--keep-session]
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ from sprite_gen.spec.runio import atomic_write_text
 
 from . import chroma as chroma_mod
 from .base import (
+    QUALITIES,
     TRANSPARENCY_CHROMA,
     TRANSPARENCY_NATIVE,
     TRANSPARENCY_STRATEGIES,
@@ -46,8 +54,9 @@ from .base import (
 )
 from .codex_provider import CodexProvider
 from .grok_provider import GrokProvider
+from .openai_provider import OpenAIProvider
 
-PROVIDERS = ("codex", "grok")
+PROVIDERS = ("codex", "grok", "openai")
 # `--alpha-mode`: `auto` reads the provider's declared strategy (the SSoT);
 # `native` / `chroma` force one. Forcing `native` on a chroma-only provider fails
 # loud — a strategy the backend cannot execute is not a fallback candidate.
@@ -71,6 +80,8 @@ def _make_provider(name: str, *, keep_session: bool):
         return CodexProvider(keep_session=keep_session)
     if name == "grok":
         return GrokProvider()
+    if name == "openai":
+        return OpenAIProvider()
     raise SystemExit(f"gen: unknown provider {name!r}; expected one of {', '.join(PROVIDERS)}")
 
 
@@ -210,6 +221,7 @@ def generate_image(
     refs: list[Path] | None = None,
     model: str | None = None,
     aspect_ratio: str | None = None,
+    quality: str | None = None,
     transparent: bool = False,
     alpha_mode: str = ALPHA_MODE_AUTO,
     chroma_key: str = "magenta",
@@ -254,6 +266,7 @@ def generate_image(
             refs=refs,
             model=model,
             aspect_ratio=aspect_ratio,
+            quality=quality,
             native_alpha=strategy == TRANSPARENCY_NATIVE,
         )
         # 타임아웃 1회 관측 가능 재시도 — 산발 provider 스톨은 같은 호출 재시도로
@@ -341,6 +354,7 @@ def _run(args: argparse.Namespace) -> int:
         refs=args.ref,
         model=args.model,
         aspect_ratio=args.aspect_ratio,
+        quality=args.quality,
         transparent=args.transparent,
         alpha_mode=args.alpha_mode,
         chroma_key=args.chroma_key,
@@ -404,13 +418,24 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--ref", action="append", type=Path, default=[], help="reference image (repeatable)")
     parser.add_argument("--model")
-    parser.add_argument("--aspect-ratio", help="grok only, e.g. 1:1 16:9 9:16")
+    parser.add_argument("--aspect-ratio", help="grok and openai, e.g. 1:1 16:9 9:16 (openai maps it to a gpt-image size; codex ignores it)")
+    parser.add_argument(
+        "--quality",
+        choices=QUALITIES,
+        default=None,
+        help=(
+            "rendering effort billed for this image; openai carries the whole range "
+            "(low..max, auto = the model decides). Omitted = the provider's own default. "
+            "A provider that cannot honour the level fails instead of downgrading it"
+        ),
+    )
     parser.add_argument(
         "--transparent",
         action="store_true",
         help=(
             "publish a transparent RGBA PNG using the provider's transparency strategy: "
-            "codex asks image_gen for real alpha (native), grok is keyed out of a chroma background"
+            "codex asks image_gen for real alpha and openai asks for background=transparent (native), "
+            "grok is keyed out of a chroma background"
         ),
     )
     parser.add_argument(
@@ -419,7 +444,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=ALPHA_MODE_AUTO,
         help=(
             "transparency strategy for --transparent: auto = the provider's declared strategy "
-            "(native on codex, but chroma whenever --ref is attached — native alpha with refs is unstable); "
+            "(native on codex and openai, but chroma whenever --ref is attached — native alpha with refs is unstable); "
             "chroma forces chroma keying (e.g. a codex prompt that already carries a key background); "
             "native forces native alpha and is refused on a provider that cannot return alpha"
         ),

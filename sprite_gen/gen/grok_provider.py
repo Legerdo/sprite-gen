@@ -5,15 +5,13 @@ from __future__ import annotations
 import base64
 import binascii
 import io
-import os
-import tempfile
 import time
 from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
 from . import xai
-from .base import GEN_TIMEOUT_SECONDS, TRANSPARENCY_CHROMA, GenRequest, ProviderRun, verify_png
+from .base import GEN_TIMEOUT_SECONDS, TRANSPARENCY_CHROMA, GenRequest, ProviderRun, publish_png
 
 DEFAULT_MODEL = "grok-imagine-image-2.0"
 MAX_REFS = 5
@@ -41,6 +39,11 @@ def _request_body(request: GenRequest) -> tuple[str, dict]:
         raise SystemExit(f"grok-gen: at most {MAX_REFS} reference images are supported")
     if request.aspect_ratio is not None and request.aspect_ratio not in ASPECT_RATIOS:
         raise SystemExit(f"grok-gen: unsupported aspect ratio {request.aspect_ratio!r}")
+    # --quality is a declared capability, not a hint: grok does not carry one yet,
+    # so an asked-for level fails here instead of being dropped from the body and
+    # billed as whatever Imagine picked (No Silent Fallback).
+    if request.quality is not None:
+        raise SystemExit("grok-gen: --quality is not carried into grok Imagine; drop it or use --provider openai")
     body = {"model": request.model or DEFAULT_MODEL, "prompt": request.prompt,
             "n": 1, "response_format": "b64_json"}
     if request.aspect_ratio and len(request.refs) != 1:
@@ -56,28 +59,16 @@ def _request_body(request: GenRequest) -> tuple[str, dict]:
 
 
 def _publish_image(item: dict, path: Path) -> None:
-    # Inline bytes avoid signed download URLs and bearer forwarding.
+    # Inline bytes avoid signed download URLs and bearer forwarding. Imagine may
+    # answer with JPEG; `publish_png` re-encodes it without resizing.
     encoded = item.get("b64_json")
     if not isinstance(encoded, str) or not encoded:
         raise SystemExit("grok-gen: response has no b64_json image; nothing published")
     try:
         data = base64.b64decode(encoded, validate=True)
-        with Image.open(io.BytesIO(data)) as source:
-            source.load()
-            # Imagine may return JPEG. Encode a real PNG without resizing.
-            png = io.BytesIO()
-            source.convert("RGBA" if "A" in source.getbands() else "RGB").save(png, format="PNG")
-    except (ValueError, binascii.Error, OSError, UnidentifiedImageError) as exc:
+    except (ValueError, binascii.Error) as exc:
         raise SystemExit("grok-gen: response image is invalid; nothing published") from exc
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".png", delete=False) as tmp:
-        temp = Path(tmp.name)
-    try:
-        temp.write_bytes(png.getvalue())
-        verify_png(temp)
-        os.replace(temp, path)
-    finally:
-        temp.unlink(missing_ok=True)
+    publish_png(data, path, label="grok-gen")
 
 
 class GrokProvider:

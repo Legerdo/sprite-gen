@@ -6,6 +6,8 @@ import shutil
 import subprocess
 
 from sprite_gen.gen.base import provider_binary, provider_subprocess_env
+from sprite_gen.gen.openai_provider import AUTH_ENV as OPENAI_AUTH_ENV
+from sprite_gen.gen.openai_provider import resolve_credential as resolve_openai_credential
 from sprite_gen.gen.xai import AUTH_SOURCE_API_KEY, resolve_credential
 
 
@@ -27,6 +29,17 @@ def probe_access(provider: str, *, video: bool = False) -> dict:
         if "chatgpt" not in output:
             return {**result, "reason": "login succeeded but ChatGPT subscription authentication was not identified"}
         return {**result, "login": "ready"}
+    if provider == "openai":
+        # An API key is the whole credential: there is no login to inspect and no
+        # subscription route to prefer, so readiness is the key's presence and the
+        # billing route is always metered API credit.
+        try:
+            resolve_openai_credential()
+        except (SystemExit, OSError, ValueError):
+            return {**result, "login": "unavailable",
+                    "reason": f"{OPENAI_AUTH_ENV} is not set; export the key or choose another provider"}
+        return {**result, "login": "ready", "billing": "api-credit",
+                "reason": f"OpenAI images will use {OPENAI_AUTH_ENV} and separate API credit; confirm this billing choice."}
     if provider != "grok":
         raise ValueError(f"unknown provider: {provider}")
     try:

@@ -10,11 +10,15 @@ path or a "done" string (No Silent Fallback).
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
+
+from PIL import Image, UnidentifiedImageError
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -28,6 +32,12 @@ PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 TRANSPARENCY_NATIVE = "native"
 TRANSPARENCY_CHROMA = "chroma"
 TRANSPARENCY_STRATEGIES = (TRANSPARENCY_NATIVE, TRANSPARENCY_CHROMA)
+
+# Quality is a per-provider capability over one shared vocabulary. This tuple is
+# the `--quality` surface (the union); each provider declares the subset it can
+# honour and fails loud on a name outside it, so a paid-for level is never
+# quietly downgraded to whatever the backend felt like (No Silent Fallback).
+QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
 
 # Child provider processes are independent execution contexts. They must not
 # inherit parent orchestration identity or lifecycle controls, while ordinary
@@ -99,11 +109,45 @@ class GenRequest:
     raw: Path  # provider writes the generated PNG (chroma background included) here
     refs: list[Path] = field(default_factory=list)
     model: str | None = None
-    aspect_ratio: str | None = None  # grok honours this; codex ignores it
+    aspect_ratio: str | None = None  # grok honours this; openai maps it to a size; codex ignores it
+    # Rendering effort/fidelity level, from QUALITIES. None = the provider's own
+    # default; a level the provider does not support is an error, not a downgrade.
+    quality: str | None = None
     # Ask the model for a genuinely transparent background (alpha channel). Only
     # legal for a provider whose `transparency` is `native`; the orchestrator gates
     # it and the provider carries the request into its transport prompt.
     native_alpha: bool = False
+
+
+def publish_png(data: bytes, path: Path, *, label: str) -> None:
+    """Publish decoded provider image bytes as a verified PNG at `path`.
+
+    One writer for every provider: decode first (a corrupt or non-image payload
+    fails before anything is published), re-encode only when the payload is not
+    already a PNG — grok Imagine answers with JPEG — then verify the bytes and
+    swap them in atomically. Nothing is resized. A failure leaves whatever was at
+    `path` untouched, so a stale raw is never reused as a result.
+    """
+    try:
+        with Image.open(io.BytesIO(data)) as source:
+            source.load()
+            if source.format == "PNG":
+                png = data
+            else:
+                buffer = io.BytesIO()
+                source.convert("RGBA" if "A" in source.getbands() else "RGB").save(buffer, format="PNG")
+                png = buffer.getvalue()
+    except (OSError, ValueError, UnidentifiedImageError) as exc:
+        raise SystemExit(f"{label}: response image is invalid; nothing published") from exc
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".png", delete=False) as tmp:
+        temp = Path(tmp.name)
+    try:
+        temp.write_bytes(png)
+        verify_png(temp)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 @dataclass
