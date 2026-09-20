@@ -48,8 +48,7 @@ SCRIPT_PATH = re.compile(r"(?:^|/)scripts/[^/]+\.py$")
 def _declared_package_data() -> list[str]:
     """The `sprite_gen = [...]` patterns under `[tool.setuptools.package-data]`.
 
-    Read with a regex for the same reason `test_version_ssot.py` does: `tomllib` is 3.11+
-    and this suite runs on the 3.10 floor `requires-python` promises.
+    Read the package-data declaration directly, without importing the package.
     """
     section = re.search(
         r"(?ms)^\[tool\.setuptools\.package-data\]\s*$(.*?)(?=^\[|\Z)", PYPROJECT)

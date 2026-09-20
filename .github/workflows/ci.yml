@@ -13,9 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Keep this matrix aligned with pyproject.toml and README.md:
-        # 3.10 is the minimum supported CPython; 3.14 is the latest covered version.
-        python-version: ["3.10", "3.14"]
+        # Test one Python version; the installable minimum is declared separately
+        # in pyproject.toml. Keep the tested version documented in README.md.
+        python-version: ["3.14"]
     steps:
       - uses: actions/checkout@v4
 

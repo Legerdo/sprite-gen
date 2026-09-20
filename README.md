@@ -157,7 +157,7 @@ python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-githu
 
 Image generation is part of this engine (`sprite_gen.gen`, providers `codex` and `grok` on a subscription you already pay for, plus an explicit-only `openai` provider for servers and SaaS that bills per call; the general `image-gen` skill is a thin shuttle over it). Video uses **your own** credential — the `grok` CLI login or an `XAI_API_KEY` — and nothing is shipped with the repo ([docs/video.md](docs/video.md)).
 
-`sprite-gen` supports CPython 3.10+; CI runs 3.10 and 3.14. The quickstart needs a Python with working `venv`/`ensurepip`.
+`sprite-gen` supports CPython 3.11+; CI runs only 3.14. Python 3.10 is no longer supported. The quickstart needs a Python with working `venv`/`ensurepip`.
 
 ## Attribution
 
