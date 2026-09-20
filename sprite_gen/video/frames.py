@@ -33,7 +33,7 @@ from PIL import Image
 
 from sprite_gen.frames.cutout import cutout
 from sprite_gen.frames.extract import is_border_key_candidate
-from sprite_gen.frames.extract import _SPILL_FULL_MIN_TINT
+from sprite_gen.frames.extract import _SPILL_FULL_MIN_TINT, DEFAULT_UNMIX_REACH
 from sprite_gen.spec.runio import atomic_write_text
 
 EDGE_ROWS = 4  # rows/cols inspected at each edge
@@ -139,11 +139,14 @@ def decide_spill(reference: Path, key: str) -> dict[str, Any]:
     keyed, _ = extract_route(image, kind)
     # judged at the bar `full` would treat with, so a subject that owns a mild key tint
     # is not first called "no key material" and then scrubbed of it
-    material, subject = key_material_pixels(keyed, KEY_TARGETS[kind], SPILL_FULL_MIN_TINT)
+    material, subject = key_material_pixels(keyed, KEY_TARGETS[kind], SPILL_FULL_MIN_TINT,
+                                            require_hue=True, ignore_fringe=DEFAULT_UNMIX_REACH)
     share = material / subject if subject else 0.0
     mode = "full" if share <= SPILL_REFERENCE_MAX else "small"
     return {"mode": mode, "reference": str(reference), "key": kind, "key_material_px": material,
-            "subject_px": subject, "key_material_share": round(share, 5), "share_max": SPILL_REFERENCE_MAX}
+            "subject_px": subject, "key_material_share": round(share, 5), "share_max": SPILL_REFERENCE_MAX,
+            "material_metric": "key-channel-excess", "reference_fringe_ignored_px": DEFAULT_UNMIX_REACH,
+            "reference_fringe_policy": "dark-only"}
 
 
 def key_frames(
@@ -164,7 +167,8 @@ def key_frames(
     contacts: list[dict[str, Any]] = []
     for src in raw_files:
         dst = keyed_dir / src.name
-        stats = cutout(src, dst, key=key, spill_max_fraction=spill_max, spill_min_tint=spill_tint)
+        stats = cutout(src, dst, key=key, spill_max_fraction=spill_max, spill_min_tint=spill_tint,
+                       spill_require_hue=spill == "full")
         image = Image.open(dst).convert("RGBA")
         hist = image.getchannel("A").histogram()
         w, h = image.size

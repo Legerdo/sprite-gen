@@ -272,7 +272,8 @@ def _matte_route(
 
 
 def extract_route(image: Image.Image, kind: str, *, spill_max_fraction: float | None = None,
-                  spill_min_tint: float | None = None) -> tuple[Image.Image, dict[str, Any]]:
+                  spill_min_tint: float | None = None,
+                  spill_require_hue: bool = False) -> tuple[Image.Image, dict[str, Any]]:
     """Magenta/green key background → reuse the verified `extract` chroma engine (no drift).
 
     The engine keys from the background colour it detects on the borders
@@ -286,11 +287,13 @@ def extract_route(image: Image.Image, kind: str, *, spill_max_fraction: float | 
 
     target = KEY_TARGETS[kind]
     painted = detect_background_key_rgb(image, target)
-    extra: dict[str, float] = {}
+    extra: dict[str, float | bool] = {}
     if spill_max_fraction is not None:
         extra["spill_max_fraction"] = spill_max_fraction
     if spill_min_tint is not None:
         extra["spill_min_tint"] = spill_min_tint
+    if spill_require_hue:
+        extra["spill_require_hue"] = True
     result = remove_chroma_background(
         image, target, _EXTRACT_KEY_THRESHOLD, _EXTRACT_FRINGE_THRESHOLD, _EXTRACT_FRINGE_DELTA, **extra
     )
@@ -313,6 +316,7 @@ def cutout(
     white_check_dir: Path | None = None,
     spill_max_fraction: float | None = None,
     spill_min_tint: float | None = None,
+    spill_require_hue: bool = False,
 ) -> dict[str, Any]:
     """Cut a uniform-background imported image to a clean transparent RGBA PNG.
 
@@ -332,7 +336,7 @@ def cutout(
     route = _detect_key_kind(_corner_average(image)) if key == "auto" else key
     if route in ("magenta", "green"):
         result, route_stats = extract_route(image, route, spill_max_fraction=spill_max_fraction,
-                                            spill_min_tint=spill_min_tint)
+                                            spill_min_tint=spill_min_tint, spill_require_hue=spill_require_hue)
     else:
         result, route_stats = _matte_route(image, input_path, strength, band, erode, tolerance)
 

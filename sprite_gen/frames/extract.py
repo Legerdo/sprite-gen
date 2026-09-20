@@ -156,6 +156,16 @@ def _key_tint_field(rgb: np.ndarray, keyed_channels: list[int],
     return keyed_sum / len(keyed_channels) - unkeyed_sum / len(unkeyed_channels)
 
 
+def _key_excess_field(rgb: np.ndarray, keyed_channels: list[int],
+                      unkeyed_channels: list[int]) -> np.ndarray:
+    """Key hue requires every keyed channel to exceed every other channel.
+
+    Green uses G-max(R,B); magenta uses min(R,B)-G. Unlike the averaged
+    tint axis this does not call yellow/cyan green or red/blue magenta.
+    """
+    return rgb[..., keyed_channels].min(axis=-1) - rgb[..., unkeyed_channels].max(axis=-1)
+
+
 def _grow_into(seed: np.ndarray, allowed: np.ndarray) -> np.ndarray:
     """Every `allowed` pixel 8-connected to `seed` through `allowed` pixels (seed included)."""
     reached = seed & allowed
@@ -365,24 +375,37 @@ _SPILL_MIN_TINT = 40.0
 # Full correction also admits faint key tints. Auto mode must inspect the
 # reference at this same threshold before choosing full correction.
 _SPILL_FULL_MIN_TINT = 8.0
+DEFAULT_UNMIX_REACH = 4
 
 
 def key_material_pixels(image: Image.Image, chroma_key: tuple[int, int, int],
-                        min_tint: float = _SPILL_MIN_TINT) -> tuple[int, int]:
+                        min_tint: float = _SPILL_MIN_TINT, *, require_hue: bool = False,
+                        ignore_fringe: int = 0) -> tuple[int, int]:
     """Opaque pixels that are key-tinted past `min_tint` (the trapped-spill bar), and all
     opaque pixels, of an already keyed RGBA image. A still that has almost none carries no
     key-coloured material of its own.
 
     The bar is a parameter because the decision and the treatment have to read the same
     one: judging a reference at 40 and then despilling it down to 8 would call a subject
-    with a mild green of its own "no key material" and then scrub that green away."""
+    with a mild green of its own "no key material" and then scrub that green away.
+    `require_hue` uses channel excess rather than the mean-channel tint axis;
+    `ignore_fringe` discounts dark pixels in that band beside transparency;
+    bright key-coloured accents remain material evidence. The denominator stays
+    total subject area."""
     keyed_channels, unkeyed_channels = _key_channel_split(chroma_key)
     data = np.asarray(image.convert("RGBA")).astype(np.int32)
     opaque = data[..., 3] > 0
     if not keyed_channels:
         return 0, int(opaque.sum())
-    tint = _key_tint_field(data[..., :3], keyed_channels, unkeyed_channels)
-    return int((opaque & (tint > min_tint)).sum()), int(opaque.sum())
+    field = _key_excess_field if require_hue else _key_tint_field
+    tint = field(data[..., :3], keyed_channels, unkeyed_channels)
+    # Discount only dark outline contamination in the matte's unmix band.
+    # A bright green/magenta accent is material even when it is thin or on an edge.
+    fringe = ~opaque
+    for _ in range(ignore_fringe):
+        fringe = _grow_chebyshev(fringe)
+    dark_fringe = fringe & (data[..., :3].max(axis=-1) < _KEY_CHANNEL_DARK)
+    return int((opaque & ~dark_fringe & (tint > min_tint)).sum()), int(opaque.sum())
 
 
 def remove_chroma_background(
@@ -392,9 +415,10 @@ def remove_chroma_background(
     fringe_threshold: float,
     fringe_delta: float,
     *,
-    unmix_reach: int = 4,
+    unmix_reach: int = DEFAULT_UNMIX_REACH,
     spill_max_fraction: float = 0.005,
     spill_min_tint: float = _SPILL_MIN_TINT,
+    spill_require_hue: bool = False,
     background_key: tuple[int, int, int] | None = None,
 ) -> Image.Image:
     """Key `chroma_key` out of `image` (hard cut + soft-alpha fringe unmix + trapped-spill despill).
@@ -527,8 +551,10 @@ def remove_chroma_background(
         spill_limit = max(32, round(subject_count * spill_max_fraction))
         # Re-scored on the *current* colors: the unmix pass above rewrote part of
         # the image, and a pixel it despilled is no longer a spill candidate.
-        current_tint = _key_tint_field(data[..., :3].astype(np.int32),
-                                       keyed_channels, unkeyed_channels)
+        spill_field = _key_excess_field if spill_require_hue else _key_tint_field
+        current_tint = spill_field(data[..., :3].astype(np.int32), keyed_channels, unkeyed_channels)
+        spill_key_tint = float(spill_field(np.asarray(painted_key, dtype=np.int32),
+                                           keyed_channels, unkeyed_channels))
         # Candidacy and acceptance read the same bar: a cluster can never be accepted
         # below `spill_min_tint`, so admitting only pixels at or above `fringe_delta`
         # would silently keep the lowered bar from reaching anything when it is the
@@ -569,7 +595,7 @@ def remove_chroma_background(
                 red, green, blue, alpha = (int(value) for value in data[y, x])
                 color = (red, green, blue)
                 coverage, despilled = despill_color(
-                    color, painted_key, key_tint, key_tint_score(color, chroma_key)
+                    color, painted_key, spill_key_tint, tints_left[index]
                 )
                 if coverage > 0:
                     data[y, x] = (*despilled, alpha)
