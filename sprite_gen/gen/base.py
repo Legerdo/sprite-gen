@@ -40,6 +40,15 @@ TRANSPARENCY_STRATEGIES = (TRANSPARENCY_NATIVE, TRANSPARENCY_CHROMA)
 # quietly downgraded to whatever the backend felt like (No Silent Fallback).
 QUALITIES = ("auto", "low", "medium", "high", "xhigh", "max")
 
+# Output resolution — the second billed knob, over one shared vocabulary naming
+# the long edge of the published image (`1k` = 1024px). grok Imagine sizes its
+# output this way and prices it together with `quality`; a provider that sizes
+# differently (openai derives a gpt-image `size` from `--aspect-ratio`) refuses
+# the flag rather than accepting money for a resolution it will not deliver.
+# Distinct from the video RESOLUTIONS (`480p`/`720p`/`1080p`), which names a
+# frame height.
+RESOLUTIONS = ("1k", "1.5k", "2k")
+
 # Child provider processes are independent execution contexts. They must not
 # inherit parent orchestration identity or lifecycle controls, while ordinary
 # variables such as PATH remain available. Suffix matching keeps the contract
@@ -129,6 +138,10 @@ class GenRequest:
     # Rendering effort/fidelity level, from QUALITIES. None = the provider's own
     # default; a level the provider does not support is an error, not a downgrade.
     quality: str | None = None
+    # Output resolution, from RESOLUTIONS. None = the provider's own default
+    # (grok: `1k`); a provider that cannot size its output this way is an error,
+    # not a downgrade.
+    resolution: str | None = None
     # Ask the model for a genuinely transparent background (alpha channel). Only
     # legal for a provider whose `transparency` is `native`; the orchestrator gates
     # it and the provider carries the request into its transport prompt.

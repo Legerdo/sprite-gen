@@ -137,6 +137,14 @@ def _fields(request: GenRequest) -> dict[str, str]:
         raise SystemExit("openai-gen: empty prompt")
     if len(request.refs) > MAX_REFS:
         raise SystemExit(f"openai-gen: at most {MAX_REFS} reference images are supported")
+    # `size` here comes from --aspect-ratio (SIZES); gpt-image has no long-edge
+    # preset, so an asked-for resolution is refused instead of being dropped from
+    # a body the caller is about to pay for (No Silent Fallback).
+    if request.resolution is not None:
+        raise SystemExit(
+            f"openai-gen: resolution {request.resolution!r} is grok Imagine's vocabulary; "
+            "a gpt-image size comes from --aspect-ratio"
+        )
     quality = request.quality or DEFAULT_QUALITY
     if quality not in SUPPORTED_QUALITIES:
         raise SystemExit(

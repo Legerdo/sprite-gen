@@ -28,6 +28,7 @@ CLI:
         [--ref REF.png ...] [--transparent [--alpha-mode auto|native|chroma]
         [--chroma-key magenta|green]] [--white-check CHECK.png] [--model ID]
         [--aspect-ratio 1:1] [--quality low|medium|high|xhigh|max|auto]
+        [--resolution 1k|1.5k|2k]
         [--report REPORT.json] [--keep-session]
 """
 
@@ -48,6 +49,7 @@ from sprite_gen.spec.runio import atomic_write_text
 from . import chroma as chroma_mod
 from .base import (
     QUALITIES,
+    RESOLUTIONS,
     TRANSPARENCY_CHROMA,
     TRANSPARENCY_NATIVE,
     TRANSPARENCY_STRATEGIES,
@@ -244,6 +246,7 @@ def generate_image(
     model: str | None = None,
     aspect_ratio: str | None = None,
     quality: str | None = None,
+    resolution: str | None = None,
     transparent: bool = False,
     alpha_mode: str = ALPHA_MODE_AUTO,
     chroma_key: str = "magenta",
@@ -289,6 +292,7 @@ def generate_image(
             model=model,
             aspect_ratio=aspect_ratio,
             quality=quality,
+            resolution=resolution,
             native_alpha=strategy == TRANSPARENCY_NATIVE,
         )
         # 타임아웃 1회 관측 가능 재시도 — 산발 provider 스톨은 같은 호출 재시도로
@@ -377,6 +381,7 @@ def _run(args: argparse.Namespace) -> int:
         model=args.model,
         aspect_ratio=args.aspect_ratio,
         quality=args.quality,
+        resolution=args.resolution,
         transparent=args.transparent,
         alpha_mode=args.alpha_mode,
         chroma_key=args.chroma_key,
@@ -449,8 +454,20 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help=(
             "rendering effort billed for this image; openai carries the whole range "
-            "(low..max, auto = the model decides). Omitted = the provider's own default. "
-            "A provider that cannot honour the level fails instead of downgrading it"
+            "(low..max, auto = the model decides) and grok takes low / medium / auto. "
+            "Omitted = the provider's own default. A provider that cannot honour the "
+            "level fails instead of downgrading it"
+        ),
+    )
+    parser.add_argument(
+        "--resolution",
+        choices=RESOLUTIONS,
+        default=None,
+        help=(
+            "output resolution, as the long edge of the image: grok Imagine's "
+            "1k / 1.5k / 2k, priced together with --quality. Omitted = the provider's "
+            "own default (grok: 1k). openai sizes from --aspect-ratio and codex from "
+            "neither, so both refuse this flag instead of ignoring it"
         ),
     )
     parser.add_argument(

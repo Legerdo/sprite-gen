@@ -668,6 +668,21 @@ def test_real_providers_declare_their_transparency_strategy() -> None:
     assert grok_provider.GrokProvider.transparency == gen_base.TRANSPARENCY_CHROMA
 
 
+@pytest.mark.parametrize("options, flag", [({"quality": "max"}, "--quality"),
+                                           ({"quality": "auto"}, "--quality"),
+                                           ({"resolution": "2k"}, "--resolution")])
+def test_codex_refuses_a_level_image_gen_cannot_carry(tmp_path: Path, monkeypatch, options, flag) -> None:
+    """image_gen has no effort or size dial, so the level is refused, never dropped:
+    a caller who paid attention to --quality must not get a default-effort image."""
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("codex must not be spawned"))
+    with pytest.raises(SystemExit, match=flag) as error:
+        codex_provider.CodexProvider().generate(GenRequest("x", tmp_path / "raw.png", **options), tmp_path)
+    assert "openai" in str(error.value)
+    assert not (tmp_path / "raw.png").exists()
+
+
 def test_grok_refuses_a_native_alpha_request_before_upload(tmp_path: Path, monkeypatch) -> None:
     from sprite_gen.gen import grok_provider
 

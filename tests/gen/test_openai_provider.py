@@ -220,7 +220,7 @@ def test_invalid_request_fails_before_any_billable_call(tmp_path, api):
     good_ref = tmp_path / "good.png"
     Image.new("RGB", (4, 4), (1, 2, 3)).save(good_ref)
     for options in ({"prompt": "   "}, {"refs": [bad_ref]}, {"refs": [good_ref] * (openai.MAX_REFS + 1)},
-                    {"aspect_ratio": "19.5:9"}, {"quality": "ultra"}):
+                    {"aspect_ratio": "19.5:9"}, {"quality": "ultra"}, {"resolution": "2k"}):
         prompt = options.pop("prompt", "x")
         with pytest.raises(SystemExit):
             openai.OpenAIProvider().generate(GenRequest(prompt, tmp_path / "raw.png", **options), tmp_path)
@@ -342,3 +342,12 @@ def test_cli_accepts_provider_and_quality(tmp_path, api):
     assert body["quality"] == "low" and body["size"] == "1536x864"
     payload = json.loads(report.read_text(encoding="utf-8"))
     assert payload["provider"] == "openai" and payload["provider_resolved_from"] == "explicit"
+
+
+def test_a_grok_resolution_is_refused_rather_than_dropped(tmp_path, api):
+    """gpt-image has no long-edge preset: --resolution would be paid for and ignored."""
+    with pytest.raises(SystemExit, match="aspect-ratio") as error:
+        gen.generate_image("openai", "x", tmp_path / "out.png", resolution="2k")
+    assert "2k" in str(error.value)
+    assert api["calls"] == []
+    assert not (tmp_path / "out.png").exists()
