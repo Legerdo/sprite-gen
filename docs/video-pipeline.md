@@ -212,7 +212,15 @@ failed and the window), `table.md` has a `kind` column, the strip sidecar carrie
 play it once on a trigger rather than repeating it), and the same seam and animation
 gates still apply. `--cycle periodic` keeps the old hard failure; `--cycle
 one-shot` forces the excursion cut. A clip that never leaves its rest pose fails loud
-in both detectors. `--cycle fixed --start N --length L` skips detection and cuts exactly
+in both detectors. The excursion is admitted by either of two measures, and the report
+says which (`cycle.excursion_rule`): the peak's height in MADs of the rest noise
+(`excursion_contrast` ≥ 3), or the fraction of the rest frame's pixel mass the peak moves
+(`excursion_moved` ≥ 0.4). The second exists because the MAD is not rest noise when the
+rest is not one pose — a body that walks a few steps, hops once and freezes has its
+frames spread between the walking preamble and the frozen tail, and a 42 px hop scored
+1.8 MADs (2026-09-20). Moved mass is scale-free: a hop shifts the whole silhouette out of
+its own footprint (0.54–1.07 on eight measured jumps), a jittering stand does not
+(0.12–0.24). Under the mass rule the active frames are those above half the peak. `--cycle fixed --start N --length L` skips detection and cuts exactly
 those frames — for a clip that holds too few repeats for the periodicity gate but whose
 cycle is known (the 2026-09-09 reel jump: 2.3 hops in 145 frames). It is an explicit
 instruction, not a failover: the report says `kind = "fixed"`, and the seam gate still
