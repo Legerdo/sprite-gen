@@ -342,3 +342,88 @@ def test_refresh_prescription_is_a_non_agent_command_run_outside_the_repo(tmp_pa
     assert video.GROK_REFRESH_WHERE in message
     assert "grok -p ok" not in message.replace("`grok -p …`", "")
     assert "coding agent" in message
+
+
+# --- the API-credit notice (구독 우선 불변식 5) ---------------------------------
+
+
+def _billed_run(verb: str, tmp_path: Path, **transport):
+    """Submit one job of `verb` through the fake transport."""
+    if verb == "video":
+        return video.generate_video(_request(tmp_path, duration=3, resolution="480p"), **transport)
+    clip = tmp_path / "in.mp4"
+    clip.write_bytes(MP4)
+    transport = {**transport, "probe": lambda path: 6.0}  # ffprobe stand-in: input and staged alike
+    if verb == "video-extend":
+        return video.extend_video(video.ExtendRequest(video=clip, prompt="she presses on", out=tmp_path / "longer.mp4", duration=4), **transport)
+    return video.edit_video(video.EditRequest(video=clip, prompt="make the hakama black", out=tmp_path / "edited.mp4"), **transport)
+
+
+@pytest.mark.parametrize("verb, priced", [
+    ("video", " (duration=3s, resolution=480p)"),
+    ("video-extend", " (duration=4s)"),
+    ("video-edit", ""),  # the edit body sends neither knob, so the line names neither
+])
+def test_every_verb_announces_the_charge_before_the_request_leaves(tmp_path: Path, capsys, verb, priced) -> None:
+    """A clip on XAI_API_KEY is metered API credit; the payer hears it before the upload,
+    not on the invoice. Imagine prices a clip by length x output size, so the knobs that
+    set the amount ride along with the charge."""
+    api = _FakeApi()
+    heard: list[str] = []
+
+    def call(method, url, token, body):
+        if method == "POST":
+            heard.append(capsys.readouterr().err)  # everything said before the job was submitted
+        return api.call(method, url, token, body)
+
+    _billed_run(verb, tmp_path, credential=video.Credential("console-key", video.AUTH_SOURCE_API_KEY),
+                call=call, download=api.download, sleep=lambda s: None)
+
+    notice = [line for line in heard[0].splitlines() if "per-call API charge" in line]
+    assert len(notice) == 1
+    assert notice[0].startswith(f"[gen] {verb}: running on {video.AUTH_ENV} ")
+    assert f"not a subscription{priced} — " in notice[0]
+    # The shared prefix denies the subscription once; the detail carries the remedy only
+    # (the grok image notice read "not a subscription (...), not your Grok subscription").
+    assert notice[0].count("not ") == 1
+    assert f"`{video.GROK_LOGIN_COMMAND}` signs your Grok subscription in." in notice[0]
+
+
+@pytest.mark.parametrize("verb", ["video", "video-extend", "video-edit"])
+def test_the_subscription_route_stays_silent_about_billing(tmp_path: Path, capsys, verb) -> None:
+    api = _FakeApi()
+    _billed_run(verb, tmp_path, credential=video.Credential("tok", video.AUTH_SOURCE_GROK_LOGIN),
+                call=api.call, download=api.download, sleep=lambda s: None)
+    assert "per-call API charge" not in capsys.readouterr().err
+
+
+def test_a_request_that_never_leaves_never_announces_a_charge(tmp_path: Path, monkeypatch, capsys) -> None:
+    """The line tracks charges, not intentions: a body refused locally costs nothing."""
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "no-login"))
+    monkeypatch.setenv("XAI_API_KEY", "console-key")
+    api = _FakeApi()
+    with pytest.raises(SystemExit, match="--duration must be"):
+        video.generate_video(_request(tmp_path, duration=99), call=api.call, download=api.download, sleep=lambda s: None)
+    assert api.calls == []
+    assert "per-call API charge" not in capsys.readouterr().err
+
+
+def test_the_cli_announces_on_stderr_leaving_the_report_on_stdout(tmp_path: Path, monkeypatch, capsys) -> None:
+    """The credential the environment actually hands the CLI is what decides, and the
+    notice goes to stderr so a caller parsing stdout still reads one JSON report."""
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "no-login"))
+    monkeypatch.setenv("XAI_API_KEY", "console-key")
+    api = _FakeApi()
+    monkeypatch.setattr(video, "http_json", api.call)
+    monkeypatch.setattr(video, "http_download", api.download)
+    monkeypatch.setattr(video.time, "sleep", lambda s: None)
+
+    rc = video.run(image=_still(tmp_path), prompt="sway", prompt_file=None, out=tmp_path / "clip.mp4",
+                   duration=6, resolution="720p", aspect_ratio=None, model=video.DEFAULT_MODEL,
+                   generate_audio=None, report=None)
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert len([line for line in captured.err.splitlines() if "per-call API charge" in line]) == 1
+    assert json.loads(captured.out)["auth_source"] == "XAI_API_KEY"
+    assert "console-key" not in captured.err + captured.out  # the key itself is never printed
