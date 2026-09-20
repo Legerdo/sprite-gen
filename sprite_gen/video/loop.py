@@ -8,7 +8,9 @@ hitches at the wrap (2026-09-08 실측: side walk picked 39 frames where the per
 was 28, run picked 25 where it was 17). So the true period is read from the
 GLOBAL profile `P[L] = mean_j |f[j] - f[j+L]|` — its deepest local minimum inside
 the state's window — and only then is the start chosen as the best seam for that
-period. Idle motion is tiny and not strictly periodic: its window is opened to
+period. Gaits also compare the motion around the two cycle boundaries so an
+accidental single-frame seam cannot outrank a coherent repeat. Idle motion is
+tiny and not strictly periodic: its window is opened to
 most of the clip, where the seam is lowest.
 
 Everything downstream is measured, never assumed: the seam ratio (wrap distance
@@ -153,13 +155,35 @@ def distance_matrix(files: list[Path]) -> np.ndarray:
     return D
 
 
+def _repeat_context(D: np.ndarray, start: int, length: int, step: float) -> dict[str, Any]:
+    """Compare a neighbourhood at the cut with the same poses one cycle later.
+
+    A quarter-cycle on either side samples half a cycle of motion instead of one
+    coincident pose. At a clip edge only real pairs participate; no padding or
+    synthetic wrap is evidence of repetition. Normalise by the candidate's
+    playback step so the cost is independent of character size and contrast.
+    This measures temporal consistency, not limb identity.
+    """
+    radius = max(1, length // 4)
+    first = max(0, start - radius)
+    stop = min(len(D) - length, start + radius + 1)
+    error = float(np.mean([D[j, j + length] for j in range(first, stop)]))
+    return {
+        "context_pair_range": [first, stop],  # half-open source indices
+        "context_repeat_error": error,
+        "context_repeat_over_step": error / step if step > 0 else math.inf,
+    }
+
+
 def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int | None = None) -> dict[str, Any]:
-    """Global period (deepest local minimum of the averaged profile) then the best-seam start.
+    """Global period, then a wrap-compatible start with coherent gait context.
 
     `gait_floor` (frames) turns on the half-period guard: a period below it is one step
     of a two-step gait, so the doubled period is taken when it repeats about as well
     (see GAIT_DOUBLE_TOL). Above the floor, ambiguous non-exact harmonics may also
-    retain two phase occurrences; the report flags that decision for visual review."""
+    retain two phase occurrences; the report flags that decision for visual review.
+    Gait starts balance the wrap step with observed repetition around the cut;
+    other states keep their wrap-only ranking."""
     n = D.shape[0]
     max_len = min(max_len, n - 2)
     if min_len < 2 or max_len < min_len:
@@ -217,6 +241,7 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
     # playback step. Minimising distance alone rewards a repeated pose (a stall).
     # Log distance penalises steps that are too short or too long symmetrically.
     best: dict[str, Any] | None = None
+    best_score = math.inf
     for L in (period - 1, period, period + 1):
         if L < min_len or L > max_len:
             continue
@@ -225,12 +250,21 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
             inner = float(adjacent[i : i + L - 1].mean())
             ratio = seam / inner if inner > 0 else math.inf
             score = abs(math.log(ratio)) if ratio > 0 else math.inf
-            if best is None or score < best["wrap_score"]:
+            selection = None
+            if gait_floor is not None:
+                selection = _repeat_context(D, i, L, inner)
+                selection["method"] = "repeat-context-and-wrap"
+                selection["wrap_log_error"] = score
+                score += selection["context_repeat_over_step"]
+                selection["score"] = score
+            if best is None or score < best_score:
+                best_score = score
                 best = {"start": i, "length": L, "seam": seam, "inner_mean_adjacent": inner,
-                        "ratio": ratio, "wrap_score": score,
+                        "ratio": ratio,
                         "next_frame_distance": float(D[i, i + L]) if i + L < n else None}
+                if selection is not None:
+                    best["selection"] = selection
     assert best is not None
-    best.pop("wrap_score")
     best["period_global"] = period
     best["half_period_guard"] = guard
     best["review_recommended"] = review_recommended

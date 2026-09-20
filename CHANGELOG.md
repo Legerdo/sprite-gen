@@ -2,6 +2,12 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## v2.5.1 - More consistent automatic walk and run loops
+
+- Automatic gait cuts now score whether neighbouring poses repeat one cycle later as well as the last-to-first transition. This reduces selection of irregular motion that happens to have a plausible seam, without preferring an earlier or later part of the clip.
+- Loop reports expose the selected neighbourhood, normalized repeat error and combined score in `cycle.selection`. Existing period detection, manual cuts, non-gait states and source playback speed are preserved.
+- Synthetic regressions cover steady and irregular motion in both time directions. The repeat metric measures temporal consistency; it does not identify anatomical left/right limbs or repair malformed source motion.
+
 ## v2.5.0 - API image generation and smoother loop cuts
 
 - New `openai` image provider: `sprite-gen gen --provider openai` calls the OpenAI Images REST API with nothing but `OPENAI_API_KEY` — the credential a headless container (a Modal worker, CI, a SaaS backend) can have, where the `codex` route's interactive ChatGPT login cannot exist. New images go to `/v1/images/generations`, `--ref` switches to `/v1/images/edits` as multipart with the references as repeated `image[]` parts in order (up to 16), and gpt-image's inline base64 is decoded and published as a verified PNG without resizing. Default model `gpt-image-2.5-flare`. `--transparent` asks for `background: transparent` with `output_format: png` — the same measured `native` strategy as codex, and a live run came back 84 % alpha-0 with the subject at alpha 251–254. `--aspect-ratio` maps to one of the gpt-image `size` values that satisfy the API's constraints (both sides divisible by 16, ratio within 1:3..3:1, 655,360–8,294,400 pixels); a ratio with no exact size is refused rather than rounded to a nearby one you would be billed for. A missing or empty key, a rejected key and a failed request are all terminal: this provider never falls back to codex, to another credential, or to a retry.
