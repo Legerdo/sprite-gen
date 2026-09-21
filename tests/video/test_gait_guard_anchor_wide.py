@@ -196,6 +196,8 @@ def test_video_set_passes_shape_and_anchor_through(tmp_path: Path, monkeypatch) 
         Path(log).write_text("")
         return 0
 
+    # This routing test must not inspect its synthetic still through a live provider.
+    monkeypatch.setattr(batch_mod.facing_mod.vision, "grok_inspect", lambda *a, **kw: ("right", {}))
     monkeypatch.setattr(batch_mod.canvas_mod, "run_canvas", fake_canvas)
     monkeypatch.setattr(batch_mod.frames_mod, "run_frames", fake_frames)
     monkeypatch.setattr(batch_mod.loop_mod, "run_loop", fake_loop)
