@@ -2,7 +2,7 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
-## v2.5.3 - Reference and video facing controls
+## v2.5.3 - Reference facing controls and observed action returns
 
 - Reference edits can opt into `gen --facing right|left` to request orientation in the generation prompt. The default `preserve` leaves existing generation callers unchanged.
 - Facing inspection is **record-only by default**: `gen`, `video` and `video-set` use `--facing-fix none`. Explicit `mirror` corrects an observed opposite in the output copy; `gen --facing-fix regen` regenerates once, rechecks and mirrors a remaining observed opposite.
@@ -10,6 +10,9 @@ All notable public changes to `sprite-gen` are recorded here. Versions track the
 - Direction reports include model, requested direction, model-reported confidence and correction evidence. `final_direction_source` distinguishes observations from values derived by mirroring; none is independent verification. Failed or uncertain calls record `unknown` with a reason and continue without correction.
 - Known limitation: direction detectors can misclassify a correctly oriented still even at high confidence. Prompts request direction but cannot guarantee it; inspect the still before opting into correction. Front-facing observations are unchanged, and mirroring does not preserve accessory handedness.
 - Synthetic regressions cover incorrect observations with byte-preserving defaults, explicit mirror pixel symmetry, regeneration rechecks, prompt/canvas agreement and existing callers.
+- Attack loop selection searches longer action periods with observed repeat context and raises the periodicity requirement when less than a full repeat is available. The seam limit remains 2.0; walk and run selection are unchanged.
+- One-shot selection requires an observed departure and return with resting frames on both sides. Endpoint-relative motion can identify a return after a held strike, while truncated actions, stationary clips and incoherent jitter are refused. These pixel measurements do not establish anatomical correctness.
+- Loop selection and seam failures write structured reports with the rejected candidate, search window and repeat/return evidence. Successful reports explicitly record `status: passed`; undefined ratios are represented as JSON `null`.
 
 ## v2.5.2 - Cleaner video spill correction
 
