@@ -29,7 +29,8 @@ Ask an image model for a "sprite sheet" and you know what you get: a character w
 For side sprites, `video-set` uses `--facing right|left` consistently across canvas placement and clip prompts. Its direction detector is **record-only by default** (`--facing-fix none`) and can be wrong even at high confidence. Use `gen --ref image.png --facing right` to request orientation in the generation prompt; `gen` otherwise preserves orientation. Prompts request direction but cannot guarantee the result. Correction is opt-in: `--facing-fix mirror`, or `gen --facing-fix regen`; review the still before using either. See [facing options](SKILL.md#side-view-facing).
 
 <p align="center">
-  <img src="docs/assets/attack-claudecy-samurai.gif" height="160" alt="Samurai Claudecy katana cut loop">
+  <img src="docs/assets/attack-claudecy-samurai.gif" height="160" alt="Samurai Claudecy two-handed katana cut loop">
+  <img src="docs/assets/attack-claudecy-samurai-onehand.gif" height="160" alt="Samurai Claudecy one-handed katana cut loop">
   <img src="docs/assets/attack-slime.gif" height="160" alt="Slime attack loop">
   <img src="docs/assets/attack-fox-hood.gif" height="160" alt="Hooded fox attack loop">
   <img src="docs/assets/attack-paladin.gif" height="160" alt="Paladin attack loop">
