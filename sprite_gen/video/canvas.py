@@ -4,7 +4,7 @@
 Grok Imagine keeps the input image's framing and ignores `aspect_ratio` on
 image-to-video (2026-09-08 실측: a `3:4` request still returned 960x960). So the
 canvas is decided HERE, on the still: a jump needs head-room above (tall), an
-attack or projectile needs room in front (wide), everything else stays square.
+attack needs room above and in front, a projectile needs room in front (wide), everything else stays square.
 The state -> canvas table below is the single owner of that rule; `--shape`
 overrides it per call.
 
@@ -46,7 +46,7 @@ SHAPES = (SHAPE_SQUARE, SHAPE_TALL, SHAPE_WIDE)
 class CanvasProfile:
     shape: str
     ratio: float  # width / height
-    headroom: float  # fraction of the canvas height kept empty ABOVE the subject (tall)
+    headroom: float  # fraction of the canvas height kept empty ABOVE the still (tall/wide)
     lead: float  # fraction of the canvas width kept empty IN FRONT of the subject (wide)
     why: str
 
@@ -55,7 +55,7 @@ class CanvasProfile:
 # states fall through to `default`.
 STATE_CANVAS: dict[str, CanvasProfile] = {
     "jump": CanvasProfile(SHAPE_TALL, 3 / 4, 0.34, 0.0, "airborne frames need head-room; hair clipped at 1:1"),
-    "attack": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.28, "weapon swings and projectiles extend in front"),
+    "attack": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.35, 0.28, "weapon swings rise overhead and extend in front"),
     "projectile": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.34, "projectile travels away from the body"),
     # Raised-limb celebrations leave a square frame at the top corners; wide with a
     # symmetric margin keeps them inside (lead applies in front, the rest pads the back).
@@ -191,7 +191,8 @@ def pad_canvas(
         canvas_w = max(w, round(canvas_h * profile.ratio))
         x, y = (canvas_w - w) // 2, canvas_h - h
     else:  # wide: extra width goes in front of the facing direction; at least the profile ratio
-        canvas_w = max(w, round(w / (1 - front)), round(h * profile.ratio))
+        required_h = max(h, round(h / (1 - head)))
+        canvas_w = max(w, round(w / (1 - front)), round(required_h * profile.ratio))
         canvas_h = max(h, round(canvas_w / profile.ratio))
         y = canvas_h - h
         x = 0 if facing == "right" else canvas_w - w
@@ -248,7 +249,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--state", help="motion state name (jump/attack/projectile/... — selects the canvas row)")
     parser.add_argument("--shape", choices=SHAPES, help="override the state's canvas shape")
     parser.add_argument("--facing", choices=("right", "left"), default="right", help="which way the subject faces (wide canvases add room in front)")
-    parser.add_argument("--headroom", type=float, help="tall: empty fraction above the subject (default from the profile)")
+    parser.add_argument("--headroom", type=float, help="tall/wide: empty fraction of canvas height above the still (default from the profile)")
     parser.add_argument("--lead", type=float, help="wide: empty fraction in front of the subject (default from the profile)")
     parser.add_argument("--key", choices=KEYS, default="auto", help="chroma key of the still (auto reads the corners; green/magenta are normalized to the exact key; white pads with the corner colour)")
     parser.add_argument("--report", type=Path, help="write the canvas report JSON here")

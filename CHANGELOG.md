@@ -14,6 +14,8 @@ All notable public changes to `sprite-gen` are recorded here. Versions track the
 - One-shot selection requires an observed departure and return with resting frames on both sides. Endpoint-relative motion can identify a return after a held strike, while truncated actions, stationary clips and incoherent jitter are refused. These pixel measurements do not establish anatomical correctness.
 - Loop selection and seam failures write structured reports with the rejected candidate, search window and repeat/return evidence. Successful reports explicitly record `status: passed`; undefined ratios are represented as JSON `null`.
 
+- Attack canvases reserve overhead room as well as forward room for raised weapon swings. Wide padding now honors headroom while preserving 16:9 and the still pixels; idle, walk, run and jump defaults are unchanged.
+
 ## v2.5.2 - Cleaner video spill correction
 
 - Automatic spill selection distinguishes the key hue from yellow/cyan or red/blue material and discounts dark contamination in the reference matte edge band. Bright key-coloured details still count as material.
