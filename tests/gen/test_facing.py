@@ -145,9 +145,25 @@ def test_one_word_never_invents_confidence():
                                                 "confidence_source": "not-reported"}
 
 
+@pytest.mark.parametrize("text,direction,confidence", [
+    (' {"direction":"left","confidence":0.9} ', "left", 0.9),
+    (' \n```json\n{"direction":"right","confidence":1}\n```\n ', "right", 1),
+    ('```\n{"direction":"front","confidence":0.8}\n```', "front", 0.8),
+    ('left', "left", None),
+    ('The character faces RIGHT.', "right", None),
+    ('unreadable garbage', "unknown", None),
+])
+def test_provider_response_formats(text, direction, confidence):
+    observed = facing.parse_observation(text)
+    assert observed["direction"] == direction
+    assert observed["confidence"] == confidence
+    if direction == "unknown":
+        assert observed["reason"] == "invalid-vision-response"
+
+
 def vision_response():
     return {"model": "test-vision", "status": "completed", "usage": {"input_tokens": 4},
-            "output": [{"type": "message", "content": [{"type": "output_text", "text": '{"direction":"left","confidence":0.9}'}]}]}
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": '```json\n{"direction":"left","confidence":0.9}\n```'}]}]}
 
 
 @pytest.mark.parametrize("provider", ["openai", "grok"])
