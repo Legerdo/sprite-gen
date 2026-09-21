@@ -28,7 +28,7 @@
 
 측면 스프라이트는 `video-set`의 `--facing right|left`를 캔버스 배치와 클립 프롬프트에 일관되게 사용한다. 방향 판정기는 **기본적으로 기록만 남기며**(`--facing-fix none`), 높은 신뢰도에서도 틀릴 수 있다. `gen --ref image.png --facing right`는 생성 문장으로 방향을 요구한다. `gen`의 방향 기본값은 보존이며, 문장만으로 결과를 보장할 수는 없다. 보정은 `--facing-fix mirror` 또는 `gen --facing-fix regen`을 명시해야 하므로 먼저 스틸을 확인한다. [방향 옵션](SKILL.md#side-view-facing).
 
-<p align="center"><sub>v2.5.3 공격 루프 예시(수동 컷 없음): README 영문판의 네 GIF(카타나 클로디시, 슬라임, 두건 여우, 성기사)를 참고.</sub></p>
+<p align="center"><sub>v2.5.3 공격 루프 예시(수동 컷 없음): README 영문판의 네 GIF(사무라이 클로디시, 슬라임, 두건 여우, 성기사)를 참고.</sub></p>
 
 ## 요청으로 시작하기
 

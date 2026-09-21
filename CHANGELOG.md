@@ -16,7 +16,7 @@ All notable public changes to `sprite-gen` are recorded here. Versions track the
 
 - Attack canvases reserve overhead room as well as forward room for raised weapon swings. Wide padding now honors headroom while preserving 16:9 and the still pixels; idle, walk, run and jump defaults are unchanged.
 - The attack motion prompt now tells the video model to strike with the weapon the character already holds and to keep its gear and outfit as drawn, so an armed sprite does not fall back to punching or grow new equipment mid-clip.
-- Attack showcase: `docs/assets/attack-slime.gif`, `attack-fox-hood.gif`, `attack-paladin.gif` and `attack-claudecy-katana.gif` were produced by this release's pipeline (still, canvas, Grok Imagine clip, frames gate, loop selection) with no manual cut points. On a ten-character side-view sample every attack closed its loop; two clips needed the built-in single regeneration because the model framed the raised weapon above the top edge.
+- Attack showcase: `docs/assets/attack-slime.gif`, `attack-fox-hood.gif`, `attack-paladin.gif` and `attack-claudecy-samurai.gif` were produced by this release's pipeline (still, canvas, Grok Imagine clip, frames gate, loop selection) with no manual cut points. On a ten-character side-view sample every attack closed its loop; two clips needed the built-in single regeneration because the model framed the raised weapon above the top edge.
 
 ## v2.5.2 - Cleaner video spill correction
 
