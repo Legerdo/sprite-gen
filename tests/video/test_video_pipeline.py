@@ -440,6 +440,7 @@ def test_motion_templates_do_not_assume_a_body_plan() -> None:
 
 
 def test_run_set_staggers_retries_429_and_tables_failures(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(batch_mod.facing_mod.vision, "grok_inspect", lambda *a, **kw: ("right", {}))
     base = _still(tmp_path)
     calls: list[tuple[str, float]] = []
     import time as _time

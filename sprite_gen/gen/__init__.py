@@ -47,6 +47,7 @@ from typing import Any
 from sprite_gen.spec.runio import atomic_write_text
 
 from . import chroma as chroma_mod
+from . import facing as facing_mod
 from .base import (
     QUALITIES,
     RESOLUTIONS,
@@ -243,6 +244,8 @@ def generate_image(
     out: Path,
     *,
     refs: list[Path] | None = None,
+    facing: str | None = None,
+    facing_fix: str = "mirror",
     model: str | None = None,
     aspect_ratio: str | None = None,
     quality: str | None = None,
@@ -259,12 +262,16 @@ def generate_image(
     prompt = (prompt or "").strip()
     if not prompt:
         raise SystemExit("gen: empty prompt; pass --prompt or --prompt-file")
+    if facing is not None:
+        facing_mod.validate(facing, facing_fix)
     out = out.expanduser().resolve()
     refs = [Path(r).expanduser().resolve() for r in (refs or [])]
     for ref in refs:
         if not ref.is_file():
             raise SystemExit(f"gen: reference image not found: {ref}")
 
+    if refs and facing is not None:
+        prompt += "\n\n" + facing_mod.prompt_suffix(facing)
     backend = _make_provider(provider, keep_session=keep_session)
     # Decided before the model runs: the strategy shapes the transport prompt
     # (native asks for alpha) and the post-process (chroma keys it out).
@@ -302,6 +309,12 @@ def generate_image(
         except GenTimeoutError as exc:
             print(f"[gen] {exc} — retrying once", file=sys.stderr)
             run = backend.generate(request, workdir)
+        verify_png(raw)
+        facing_report = None
+        if refs and facing is not None:
+            request, run, facing_report = facing_mod.prepare_correction(
+                backend, request, run, workdir, facing=facing, fix=facing_fix)
+            raw = request.raw
         raw_bytes = verify_png(raw)
 
         chroma_stats: dict[str, Any] | None = None
@@ -319,6 +332,10 @@ def generate_image(
         else:
             shutil.copyfile(raw, out)
         verify_png(out)
+        if facing_report and (facing_report["action"] == "mirror" or facing_report.get("fallback") == "mirror"):
+            facing_mod.mirror(out)
+            if white_check is not None and transparent:
+                facing_mod.mirror(white_check)
         trim_stats: dict[str, Any] | None = None
         if trim_alpha:
             if not transparent:
@@ -342,7 +359,8 @@ def generate_image(
             transparent=transparent,
             alpha=alpha_stats,
             chroma=chroma_stats,
-            extra={**run.extra, **({"trim_alpha": trim_stats} if trim_stats else {})},
+            extra={**run.extra, **({"trim_alpha": trim_stats} if trim_stats else {}),
+                   **({"facing": facing_report} if facing_report else {})},
         )
     finally:
         if owns_workdir:
@@ -378,6 +396,8 @@ def _run(args: argparse.Namespace) -> int:
         prompt or "",
         args.out,
         refs=args.ref,
+        facing=None if args.facing == "preserve" else args.facing,
+        facing_fix=args.facing_fix,
         model=args.model,
         aspect_ratio=args.aspect_ratio,
         quality=args.quality,
@@ -492,6 +512,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument("--chroma-key", choices=sorted(chroma_mod.KEYS), default="magenta")
+    parser.add_argument("--facing", choices=(*facing_mod.FACINGS, "preserve"), default="preserve", help="with --ref: required direction; preserve (default) leaves prompt and pixels unchanged")
+    parser.add_argument("--facing-fix", choices=facing_mod.FIXES, default="mirror", help="with --ref: correct an opposite-facing result by mirror (default), one regen, or none")
     parser.add_argument("--trim-alpha", action="store_true", help="with --transparent: crop the published PNG to its opaque bbox so the bottom edge is the foot line (margins reported)")
     parser.add_argument("--white-check", type=Path, help="write a white-composite check image")
     parser.add_argument("--keep-session", action="store_true", help="codex: do not delete the rollout jsonl")

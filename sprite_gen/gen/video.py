@@ -50,12 +50,14 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
 from sprite_gen.spec.runio import atomic_write_text
 from .base import announce_api_billing
+from .facing import FACINGS, validate as validate_facing
+from sprite_gen.video import facing as facing_mod
 from .xai import (
     API_BASE, AUTH_ENV, AUTH_SOURCE_API_KEY, AUTH_SOURCE_GROK_LOGIN,
     HTTP_TIMEOUT_SECONDS, GROK_REFRESH_COMMAND, GROK_REFRESH_WHERE, GROK_LOGIN_COMMAND,
@@ -193,6 +195,9 @@ class VideoRequest:
     generate_audio: bool | None = None  # None = API default
     last_frame: Path | None = None
     reference_images: list[Path] = field(default_factory=list)
+    direction: str | None = None
+    facing: str = "right"
+    facing_fix: str = "mirror"
 
     @property
     def mode(self) -> str:
@@ -248,6 +253,7 @@ class VideoResult:
     input_duration: float | None = None  # extend / edit: ffprobe seconds of the input clip
     output_duration: float | None = None  # extend / edit: ffprobe seconds of the published clip
     extra: dict[str, Any] = field(default_factory=dict)
+    facing: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -273,10 +279,18 @@ class VideoResult:
             "elapsed_seconds": round(self.elapsed_seconds, 3),
             "polls": self.polls,
             **({"extra": self.extra} if self.extra else {}),
+            **({"facing": self.facing} if self.facing is not None else {}),
         }
 
 
 def _validate(request: VideoRequest) -> None:
+    validate_facing(request.facing, request.facing_fix)
+    if request.direction not in (None, "side", "front", "back"):
+        raise SystemExit("video: --direction must be side, front or back")
+    if request.facing_fix not in facing_mod.FIXES:
+        raise SystemExit("video: --facing-fix must be mirror or none")
+    if request.direction == "side" and request.mode != MODE_IMAGE_TO_VIDEO:
+        raise SystemExit("video: --direction side requires a single --image, without --last-frame or --reference")
     if not request.prompt.strip():
         raise SystemExit("video: empty prompt; pass --prompt or --prompt-file")
     if request.image is None and request.last_frame is None and not request.reference_images:
@@ -470,6 +484,14 @@ def generate_video(
     last_frame = _resolved(request.last_frame)
     references = [path.expanduser().resolve() for path in request.reference_images]
 
+    facing_report = None
+    if request.direction == "side":
+        corrected = out.with_suffix(".facing.png")
+        facing_report = facing_mod.prepare_still(image, corrected, facing=request.facing,
+                                                 fix=request.facing_fix, credential=credential, call=call)
+        image = corrected
+        request = replace(request, prompt=request.prompt +
+                          f"\n\nThe subject stays in exact side view, facing {request.facing}. No turning around.")
     body = _build_generation_body(request, image, last_frame, references)
     published = _submit_poll_publish(
         verb="video", endpoint="generations", body=body, out=out, credential=credential,
@@ -500,6 +522,7 @@ def generate_video(
         generate_audio=request.generate_audio,
         mode=request.mode,
         inputs=inputs,
+        facing=facing_report,
     )
 
 
@@ -653,6 +676,9 @@ def _add_prompt_and_report(parser: argparse.ArgumentParser) -> None:
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--direction", choices=("side", "front", "back"), help="sprite view; side opts into facing inspection before video generation")
+    parser.add_argument("--facing", choices=FACINGS, default="right", help="with --direction side: required direction (default right)")
+    parser.add_argument("--facing-fix", choices=facing_mod.FIXES, default="mirror", help="with --direction side: mirror an opposite-facing still, or none to only record")
     parser.add_argument("--image", type=Path, help="the still to animate / the first frame (PNG/JPEG/WebP)")
     parser.add_argument("--last-frame", type=Path, help=f"pin the closing frame ({DEFAULT_MODEL} only); alone or with --image")
     parser.add_argument(
@@ -714,6 +740,7 @@ def _run(args: argparse.Namespace) -> int:
         generate_audio=args.generate_audio,
         last_frame=args.last_frame,
         reference_images=list(args.reference_images or []),
+        direction=args.direction, facing=args.facing, facing_fix=args.facing_fix,
     )
     return _publish_report(args, generate_video(request))
 
