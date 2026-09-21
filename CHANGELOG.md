@@ -2,6 +2,22 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## v2.5.3 - Reference facing controls and observed action returns
+
+- Reference edits can opt into `gen --facing right|left` to request orientation in the generation prompt. The default `preserve` leaves existing generation callers unchanged.
+- Facing inspection is **record-only by default**: `gen`, `video` and `video-set` use `--facing-fix none`. Explicit `mirror` corrects an observed opposite in the output copy; `gen --facing-fix regen` regenerates once, rechecks and mirrors a remaining observed opposite.
+- `video --direction side` and batch side inputs inspect the still before animation. Batch uses one shared observation per side still; the requested facing drives canvas placement and motion prompts independently of the observation. Original inputs stay intact; cached canvases and prompts must match the requested policy.
+- Direction reports include model, requested direction, model-reported confidence and correction evidence. `final_direction_source` distinguishes observations from values derived by mirroring; none is independent verification. Failed or uncertain calls record `unknown` with a reason and continue without correction.
+- Known limitation: direction detectors can misclassify a correctly oriented still even at high confidence. Prompts request direction but cannot guarantee it; inspect the still before opting into correction. Front-facing observations are unchanged, and mirroring does not preserve accessory handedness.
+- Synthetic regressions cover incorrect observations with byte-preserving defaults, explicit mirror pixel symmetry, regeneration rechecks, prompt/canvas agreement and existing callers.
+- Attack loop selection searches longer action periods with observed repeat context and raises the periodicity requirement when less than a full repeat is available. The seam limit remains 2.0; walk and run selection are unchanged.
+- One-shot selection requires an observed departure and return with resting frames on both sides. Endpoint-relative motion can identify a return after a held strike, while truncated actions, stationary clips and incoherent jitter are refused. These pixel measurements do not establish anatomical correctness.
+- Loop selection and seam failures write structured reports with the rejected candidate, search window and repeat/return evidence. Successful reports explicitly record `status: passed`; undefined ratios are represented as JSON `null`.
+
+- Attack canvases reserve overhead room as well as forward room for raised weapon swings. Wide padding now honors headroom while preserving 16:9 and the still pixels; idle, walk, run and jump defaults are unchanged.
+- The attack motion prompt now tells the video model to strike with the weapon the character already holds and to keep its gear and outfit as drawn, so an armed sprite does not fall back to punching or grow new equipment mid-clip.
+- Attack showcase: `docs/assets/attack-slime.gif`, `attack-fox-hood.gif`, `attack-paladin.gif` and `attack-claudecy-katana.gif` were produced by this release's pipeline (still, canvas, Grok Imagine clip, frames gate, loop selection) with no manual cut points. On a ten-character side-view sample every attack closed its loop; two clips needed the built-in single regeneration because the model framed the raised weapon above the top edge.
+
 ## v2.5.2 - Cleaner video spill correction
 
 - Automatic spill selection distinguishes the key hue from yellow/cyan or red/blue material and discounts dark contamination in the reference matte edge band. Bright key-coloured details still count as material.

@@ -200,6 +200,8 @@ class Provider(Protocol):
 
     def generate(self, request: GenRequest, workdir: Path) -> ProviderRun: ...
 
+    def inspect_facing(self, path: Path, workdir: Path) -> tuple[str, dict[str, Any]]: ...
+
 
 @dataclass
 class GenResult:

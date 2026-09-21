@@ -66,6 +66,41 @@ def test_wide_canvas_puts_room_in_front_of_the_facing(tmp_path: Path) -> None:
     assert abs(right.width / right.height - 16 / 9) < 0.02
 
 
+@pytest.mark.parametrize("facing", ["right", "left"])
+def test_attack_canvas_reserves_overhead_room_and_reports_placement(tmp_path: Path, facing) -> None:
+    still = _still(tmp_path)
+    out = tmp_path / "attack.png"
+    report = tmp_path / "attack.json"
+    rep = canvas_mod.run_canvas(still, out, state="attack", shape=None,
+                                facing=facing, headroom=None, lead=None, report_path=report)
+    image = Image.open(out)
+    x, y = rep["offset"]
+    assert rep["headroom"] > 0 and y >= round(image.height * rep["headroom"]) - 1
+    assert abs(image.width / image.height - 16 / 9) < 0.01
+    assert image.crop((x, y, x + 120, y + 160)).tobytes() == Image.open(still).tobytes()
+    assert image.crop((0, 0, image.width, y)).getextrema() == ((0, 0), (255, 255), (0, 0))
+    assert json.loads(report.read_text()) == rep
+    assert rep["why"] == "weapon swings rise overhead and extend in front"
+    # An explicit zero still gives the pre-headroom wide layout.
+    zero, zero_rep = canvas_mod.pad_canvas(Image.open(still), canvas_mod.profile_for("attack"), headroom=0)
+    assert zero.size == (284, 160) and zero_rep["offset"] == [0, 0]
+
+
+@pytest.mark.parametrize("state,size,offset", [
+    ("walk", (160, 160), (20, 0)),
+    ("idle", (160, 160), (20, 0)),
+    ("run", (160, 160), (20, 0)),
+    ("jump", (182, 242), (31, 82)),
+])
+def test_nonattack_canvas_defaults_preserve_pixels(tmp_path: Path, state, size, offset) -> None:
+    still = Image.open(_still(tmp_path))
+    actual, rep = canvas_mod.pad_canvas(still, canvas_mod.profile_for(state))
+    expected = Image.new("RGB", size, GREEN)
+    expected.paste(still, offset)
+    assert actual.size == expected.size and actual.tobytes() == expected.tobytes()
+    assert rep["offset"] == list(offset)
+
+
 def test_square_canvas_never_shrinks_and_refuses_non_flat_corners(tmp_path: Path) -> None:
     still = Image.open(_still(tmp_path))
     out, rep = canvas_mod.pad_canvas(still, canvas_mod.profile_for("walk"))
@@ -440,6 +475,7 @@ def test_motion_templates_do_not_assume_a_body_plan() -> None:
 
 
 def test_run_set_staggers_retries_429_and_tables_failures(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(batch_mod.facing_mod.vision, "grok_inspect", lambda *a, **kw: ("right", {}))
     base = _still(tmp_path)
     calls: list[tuple[str, float]] = []
     import time as _time

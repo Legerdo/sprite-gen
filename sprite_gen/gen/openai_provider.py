@@ -247,6 +247,16 @@ class OpenAIProvider:
     # `background: transparent` returns a real alpha channel on gpt-image-2.5.
     transparency = TRANSPARENCY_NATIVE
 
+    def inspect_facing(self, path: Path, workdir: Path) -> tuple[str, dict]:
+        from . import facing_vision as vision
+        token = resolve_credential()
+        announce_api_billing(self.name, AUTH_ENV, " (facing vision check).")
+        status, reply = http_image(API_BASE + "/responses", token,
+                                  json.dumps(vision.request_body(path, vision.OPENAI_MODEL)).encode("utf-8"),
+                                  "application/json", timeout=GEN_TIMEOUT_SECONDS)
+        text, metadata = vision.response_text(status, reply)
+        return text, {**metadata, "auth_source": AUTH_SOURCE_API_KEY, "transport": "openai-api"}
+
     def generate(self, request: GenRequest, workdir: Path) -> ProviderRun:
         fields = _fields(request)
         refs = [Path(ref) for ref in request.refs]

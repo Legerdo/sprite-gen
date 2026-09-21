@@ -295,6 +295,10 @@ class CodexProvider:
     def __init__(self, *, keep_session: bool = False) -> None:
         self.keep_session = keep_session
 
+    def inspect_facing(self, path: Path, workdir: Path) -> tuple[str, dict]:
+        from .facing_vision import codex_inspect
+        return codex_inspect(path, workdir)
+
     def generate(self, request: GenRequest, workdir: Path) -> ProviderRun:
         # `image_gen` exposes no effort or size dial, so neither knob is carried
         # into the prompt. Refusing beats returning a default-effort image under a

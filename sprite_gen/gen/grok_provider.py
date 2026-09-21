@@ -121,6 +121,10 @@ class GrokProvider:
     name = "grok"
     transparency = TRANSPARENCY_CHROMA
 
+    def inspect_facing(self, path: Path, workdir: Path) -> tuple[str, dict]:
+        from .facing_vision import grok_inspect
+        return grok_inspect(path)
+
     def generate(self, request: GenRequest, workdir: Path) -> ProviderRun:
         if request.native_alpha:
             raise SystemExit("grok-gen: grok Imagine cannot return an alpha channel; generate on a chroma key instead")

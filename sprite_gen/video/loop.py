@@ -50,16 +50,12 @@ PERIODICITY_MIN = 0.15  # the period must dip at least 15% below the profile mea
 GIF_FPS_DEFAULT = 24.0  # GIF/WebP playback density = the source rate: every cycle frame is kept, a fast action never looks slow (12 made a jump read sluggish, 2026-09-09)
 GIF_FRAMES_MIN = 4
 ONE_SHOT_MIN_CONTRAST = 3.0  # one-shot: the excursion peak must stand this far above the rest-pose noise (in MADs)
-# Second acceptance for the one-shot excursion, in units of the subject itself: the peak
-# must move at least this fraction of the rest frame's pixel mass. The MAD contrast
-# measures the peak against the spread of *every* frame's distance to the rest pose,
-# and that spread is not rest noise when the rest is not one pose — a body that walks a
-# few steps, hops once and then freezes (2026-09-20 jump field test: 42 px of lift refused
-# at 1.8 MADs because the walking preamble and the frozen tail sit 0.03 apart). Moved
-# mass is scale-free: a hop shifts the whole silhouette out of its own footprint (measured
-# 0.54-1.07 on eight jumps), a jittering stand does not (0.12-0.24 on the synthetic
-# jitter-only fixtures).
+# Endpoint-relative departure in units of mean subject pixel mass. Contrast against
+# the whole distance profile can miss a held action, so mass is a second explicit
+# acceptance rule. Sustained excursion and departure/step gates reject stand jitter.
 ONE_SHOT_MIN_MOVED = 0.4
+ONE_SHOT_MIN_COHERENCE = 3.0  # departure must exceed three ordinary playback steps
+ONE_SHOT_MIN_ACTIVE = 4  # isolated keying/jitter spikes are not a performed action
 ONE_SHOT_PAD = 2  # one-shot: rest frames kept on each side of the excursion so the seam is rest -> rest
 CYCLE_MODES = ("auto", "periodic", "one-shot", "fixed")
 ONE_SHOT_MIN_LEN = 4  # a one-shot's length is the clip's own fact; only a degenerate cut is refused
@@ -102,12 +98,18 @@ class LoopProfile:
     min_seconds: float = 0.0  # gait floor: a detected period shorter than this is treated as one step
     window_seconds: tuple[float, float] | None = None  # gait states: period bounds in seconds (see above)
 
+    action_seconds: float | None = None  # partial repeats need observed context, not a clip fraction
+
     def window(self, n: int, fps: float) -> tuple[int, int]:
         """Period-length window [lo, hi] in frames for a clip of `n` keyed frames.
 
         Gait states: `window_seconds`, the ceiling capped at half the clip. Everything
-        else keeps the clip-length fractions (idle wants nearly the whole clip; jump and
-        attack bound repeats only until the one-shot detector takes over)."""
+        else uses clip-length fractions, except attack: its action-time ceiling retains
+        actual comparison context and uses a coverage-dependent periodicity floor)."""
+        if self.action_seconds is not None:
+            lo = max(4, round(n * self.min_frac))
+            context = max(8, math.ceil(fps * 0.5))
+            return lo, min(round(self.action_seconds * fps), n - context)
         if self.window_seconds is not None:
             lo = max(4, round(self.window_seconds[0] * fps))
             return lo, max(lo + 2, min(n // 2, round(self.window_seconds[1] * fps)))
@@ -123,7 +125,7 @@ STATE_PROFILES: dict[str, LoopProfile] = {
     "walk": LoopProfile(0.06, 0.31, "full gait = two steps; the floor admits a legless body's fast bounce (~13 frames at 24 fps) — the 15% depth rule rejects the one-step half period when the near/far leg shows, and the gait floor (min_seconds) catches it when it does not", gait=True, min_seconds=0.6, window_seconds=(0.5, 1.6)),
     "run": LoopProfile(0.07, 0.23, "faster gait", gait=True, min_seconds=0.35, window_seconds=(0.3, 1.2)),
     "jump": LoopProfile(0.11, 0.45, "crouch-spring-land-return", one_shot_ok=True),
-    "attack": LoopProfile(0.11, 0.45, "swing and return to ready", one_shot_ok=True),
+    "attack": LoopProfile(0.11, 0.45, "swing and return to ready; retain at least half a second of repeat context", one_shot_ok=True, action_seconds=2.5),
     "default": LoopProfile(0.10, 0.45, "generic in-place action", one_shot_ok=True),
 }
 
@@ -242,6 +244,7 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
     # Log distance penalises steps that are too short or too long symmetrically.
     best: dict[str, Any] | None = None
     best_score = math.inf
+    candidates = []
     for L in (period - 1, period, period + 1):
         if L < min_len or L > max_len:
             continue
@@ -250,6 +253,7 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
             inner = float(adjacent[i : i + L - 1].mean())
             ratio = seam / inner if inner > 0 else math.inf
             score = abs(math.log(ratio)) if ratio > 0 else math.inf
+            candidates.append({"start": i, "length": L, "seam": seam, "inner_mean_adjacent": inner, "ratio": ratio})
             selection = None
             if gait_floor is not None:
                 selection = _repeat_context(D, i, L, inner)
@@ -265,6 +269,9 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
                 if selection is not None:
                     best["selection"] = selection
     assert best is not None
+    best["candidates"] = candidates
+    best["repeat_pairs"] = n - period
+    best["profile_sample_pairs"] = len(range(0, n - period, 2))
     best["period_global"] = period
     best["half_period_guard"] = guard
     best["review_recommended"] = review_recommended
@@ -273,79 +280,102 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
     return best
 
 
-def detect_one_shot(D: np.ndarray, *, min_len: int, max_len: int, frame_mass: np.ndarray | None = None) -> dict[str, Any]:
-    """A cycle for an action the model performed ONCE: rest -> excursion -> rest.
+class CycleSelectionError(SystemExit):
+    """A selection refusal with measurements that survive into the failure report."""
 
-    The rest pose is the medoid frame (smallest mean distance to every other frame — in a
-    clip that mostly stands still that is a standing frame). Frames whose distance to it
-    rises above the rest noise (median + ONE_SHOT_MIN_CONTRAST MADs) are the excursion; the
-    contiguous run of them that holds the peak, padded by ONE_SHOT_PAD rest frames on each
-    side, is the cycle, so the loop seam is rest -> rest by construction. Fails loud when nothing stands
-    out or the excursion does not fit the window — never returns a guess.
+    def __init__(self, message: str, diagnostics: dict[str, Any]):
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
-    `frame_mass` (from `frame_masses`) enables the second acceptance rule: when the MAD
-    contrast is under the bar because the rest is not one pose, a peak that moves at least
-    ONE_SHOT_MIN_MOVED of the rest frame's pixel mass is still an excursion, and the
-    active frames are then those above half the peak (the hump itself) rather than a
-    noise threshold that the peak does not clear.
+
+def periodicity_floor(n: int, period: int, *, partial_repeat: bool) -> float:
+    """Require stronger evidence when fewer than one full period can be compared.
+
+    Full-cycle coverage keeps the existing 15% floor. Missing coverage increases
+    the required dip linearly toward 100%; one or two lucky pairs cannot prove
+    a repeat. This is a conservative coverage policy, not a confidence interval.
     """
-    n = D.shape[0]
-    rest = int(np.argmin(D.mean(axis=1)))
-    e = D[rest]
-    med = float(np.median(e))
-    mad = float(np.median(np.abs(e - med))) or 1e-6
-    peak = float(e.max())
-    contrast = (peak - med) / mad
-    moved = (peak - med) / float(frame_mass[rest]) if frame_mass is not None and float(frame_mass[rest]) > 0 else None
-    if contrast >= ONE_SHOT_MIN_CONTRAST:
-        rule = "contrast"
-        active = e > med + ONE_SHOT_MIN_CONTRAST * mad
-    elif moved is not None and moved >= ONE_SHOT_MIN_MOVED:
-        rule = "moved"
-        active = e > med + 0.5 * (peak - med)
-    else:
-        by_mass = f", moved {moved:.2f} of the subject's mass, need {ONE_SHOT_MIN_MOVED}" if moved is not None else ""
-        raise SystemExit(
-            f"video-loop: no one-shot excursion either — the clip never leaves its rest pose "
-            f"(peak {contrast:.1f} MADs above rest, need {ONE_SHOT_MIN_CONTRAST}{by_mass}); regenerate the clip"
+    coverage = min(1.0, max(0, n - period) / period)
+    return PERIODICITY_MIN + (1 - PERIODICITY_MIN) * (1 - coverage) if partial_repeat else PERIODICITY_MIN
+
+
+def detect_one_shot(D: np.ndarray, *, min_len: int, max_len: int, frame_mass: np.ndarray | None = None) -> dict[str, Any]:
+    """Find an observed return pair enclosing a complete excursion.
+
+    A global medoid can be the held strike instead of ready. Enumerate close
+    endpoint poses, measure departure from both, and require the peak's entire
+    active component to have observed rest on BOTH sides. A clipped component
+    at frame zero or n-1 is never repaired by padding. The existing contrast /
+    moved-mass floors still reject stand jitter; return distance must additionally
+    be at most a quarter of the departure. No seam threshold is relaxed.
+    """
+    n = len(D)
+    adjacent = np.diag(D, 1)
+    candidates = []
+    max_moved = 0.0
+    for start in range(n - ONE_SHOT_MIN_LEN + 1):
+        for end in range(start + ONE_SHOT_MIN_LEN - 1, min(n, start + max_len)):
+            seam = float(D[start, end])
+            e = (D[start] + D[end]) / 2
+            peak_at = start + int(np.argmax(e[start:end + 1]))
+            peak = float(e[peak_at])
+            departure = peak - seam / 2
+            if departure <= 0 or seam > departure * 0.25:
+                continue
+            med = float(np.median(e))
+            mad = float(np.median(np.abs(e - med))) or 1e-6
+            contrast = (peak - med) / mad
+            mass = float((frame_mass[start] + frame_mass[end]) / 2) if frame_mass is not None else 0
+            moved = departure / mass if mass > 0 else None
+            max_moved = max(max_moved, moved or 0)
+            if contrast >= ONE_SHOT_MIN_CONTRAST:
+                rule = "contrast"
+                active = e > med + ONE_SHOT_MIN_CONTRAST * mad
+            elif moved is not None and moved >= ONE_SHOT_MIN_MOVED:
+                rule = "moved"
+                active = e > seam / 2 + 0.5 * departure
+            else:
+                continue
+            if not active[peak_at]:
+                continue
+            a = b = peak_at
+            while a > 0 and active[a - 1]:
+                a -= 1
+            while b + 1 < n and active[b + 1]:
+                b += 1
+            if b - a + 1 < ONE_SHOT_MIN_ACTIVE:
+                continue
+            if not (start <= a - ONE_SHOT_PAD and end >= b + ONE_SHOT_PAD):
+                continue
+            inner = float(adjacent[start:end].mean())
+            if inner <= 0 or departure < ONE_SHOT_MIN_COHERENCE * inner:
+                continue
+            candidates.append({
+                "excursion_over_step": departure / inner,
+                "kind": "one-shot", "start": start, "length": end - start + 1,
+                "seam": seam, "inner_mean_adjacent": inner,
+                "ratio": seam / inner if inner > 0 else math.inf,
+                "period_global": None, "periodicity": None,
+                "rest_frame": start, "return_pair": [start, end],
+                "return_distance_over_departure": seam / departure,
+                "excursion": [a, b], "excursion_peak": peak_at,
+                "excursion_contrast": round(contrast, 2),
+                "excursion_moved": round(moved, 3) if moved is not None else None,
+                "excursion_rule": rule, "departure": departure,
+            })
+    if not candidates:
+        raise CycleSelectionError(
+            f"video-loop: no complete one-shot return — the clip never leaves its rest pose "
+            f"and returns with observed endpoints (moved {max_moved:.2f}, "
+            f"need {ONE_SHOT_MIN_MOVED})",
+            {"kind": "one-shot", "candidates": []},
         )
-    # The excursion is the contiguous active run that holds the peak — the largest
-    # departure from rest — not the longest run: a walking preamble can be a longer
-    # departure than the hop itself and would otherwise be cut instead of the action.
-    peak_at = int(np.argmax(e))
-    a = b = peak_at
-    while a > 0 and active[a - 1]:
-        a -= 1
-    while b + 1 < n and active[b + 1]:
-        b += 1
-    start = max(0, a - ONE_SHOT_PAD)
-    end = min(n - 1, b + ONE_SHOT_PAD)
-    L = end - start + 1
-    # The periodic window's lower bound is about repeats; a one-shot has none, so only a
-    # degenerate cut is refused below and only the clip length caps it above.
-    if L < ONE_SHOT_MIN_LEN or L > max_len:
-        raise SystemExit(
-            f"video-loop: the one-shot excursion spans {L} frames ({a}..{b} + {ONE_SHOT_PAD} rest each side), "
-            f"outside [{ONE_SHOT_MIN_LEN},{max_len}]; pass --max-len if that length is intended"
-        )
-    adjacent = np.array([D[i, i + 1] for i in range(start, end)])
-    inner = float(adjacent.mean())
-    seam = float(D[start, end])
-    return {
-        "kind": "one-shot",
-        "start": start,
-        "length": L,
-        "seam": seam,
-        "inner_mean_adjacent": inner,
-        "ratio": seam / inner if inner > 0 else math.inf,
-        "period_global": None,
-        "periodicity": None,
-        "rest_frame": rest,
-        "excursion": [a, b],
-        "excursion_contrast": round(contrast, 2),
-        "excursion_moved": round(moved, 3) if moved is not None else None,
-        "excursion_rule": rule,  # which acceptance admitted it: "contrast" (MADs) or "moved" (subject mass)
-    }
+    # Keep the full strongest action, then minimise excess rest. Do not choose a
+    # tiny low-seam twitch just because its endpoints happen to match exactly.
+    strongest = max(c["departure"] for c in candidates)
+    eligible = [c for c in candidates if c["departure"] >= strongest * 0.95]
+    best = min(eligible, key=lambda c: (c["length"], c["ratio"], c["start"]))
+    return {**best, "candidates": candidates}
 
 
 def fixed_cycle(D: np.ndarray, *, start: int, length: int) -> dict[str, Any]:
@@ -600,6 +630,21 @@ def verify_animation(path: Path, *, expect_frames: int, check_stale: bool) -> di
     return report
 
 
+def write_loop_report(target: Path, payload: dict[str, Any]) -> None:
+    """Strict JSON, including refusals with undefined (zero-motion) ratios."""
+    def finite(value: Any) -> Any:
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if isinstance(value, dict):
+            return {key: finite(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [finite(item) for item in value]
+        return value
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(target, json.dumps(finite(payload), ensure_ascii=False, indent=2, allow_nan=False) + "\n")
+
+
 def run_loop(
     frames_dir: Path,
     out_dir: Path,
@@ -636,30 +681,46 @@ def run_loop(
     D = distance_matrix(files)
     masses = frame_masses(files)
     periodic_attempt: dict[str, Any] | None = None
-    if cycle_mode == "fixed":
-        if start is None or length is None:
-            raise SystemExit("video-loop: --cycle fixed needs --start and --length")
-        cycle = fixed_cycle(D, start=start, length=length)
-    elif cycle_mode == "one-shot":
-        cycle = detect_one_shot(D, min_len=lo, max_len=hi, frame_mass=masses)
-    else:
-        gait_floor = round(prof.min_seconds * fps) if prof.gait and prof.min_seconds > 0 else None
-        cycle = detect_cycle(D, min_len=lo, max_len=hi, gait_floor=gait_floor)
-        cycle["kind"] = "periodic"
-        if prof.periodic and cycle["periodicity"] < PERIODICITY_MIN:
-            flat = (
-                f"the period profile is flat (periodicity {cycle['periodicity']:.2f} < {PERIODICITY_MIN}) in window [{lo},{hi}]"
-            )
-            if cycle_mode == "auto" and prof.one_shot_ok:
-                # explicit, recorded failover: the action happened once (allowed for this state),
-                # so cut rest -> excursion -> rest instead. The periodic attempt stays in the report.
-                periodic_attempt = {"periodicity": cycle["periodicity"], "window": [lo, hi], "profile_minima": cycle["profile_minima"], "why_rejected": flat}
-                cycle = detect_one_shot(D, min_len=lo, max_len=max(hi, round(n * 0.9)), frame_mass=masses)
-            else:
-                raise SystemExit(
-                    f"video-loop: no periodic cycle found — {flat}; the motion does not repeat, widen the window, "
-                    "regenerate the clip, or pass --cycle one-shot for a single performed action"
+    target = (report_path or (out_dir / f"{name}.loop.report.json")).expanduser().resolve()
+    report_base = {
+        "kind": "sprite-gen-video-loop-report", "frames_dir": str(frames_dir),
+        "out_dir": str(out_dir), "state": state, "fps": fps, "frames_total": n,
+        "window": [lo, hi], "profile": prof.why, "cycle_mode": cycle_mode,
+        "seam_max": seam_max,
+    }
+    cycle = None
+    try:
+        if cycle_mode == "fixed":
+            if start is None or length is None:
+                raise SystemExit("video-loop: --cycle fixed needs --start and --length")
+            cycle = fixed_cycle(D, start=start, length=length)
+        elif cycle_mode == "one-shot":
+            cycle = detect_one_shot(D, min_len=lo, max_len=hi, frame_mass=masses)
+        else:
+            gait_floor = round(prof.min_seconds * fps) if prof.gait and prof.min_seconds > 0 else None
+            cycle = detect_cycle(D, min_len=lo, max_len=hi, gait_floor=gait_floor)
+            cycle["kind"] = "periodic"
+            floor = periodicity_floor(n, cycle["period_global"], partial_repeat=prof.action_seconds is not None)
+            cycle["periodicity_min"] = floor
+            if prof.periodic and cycle["periodicity"] < floor:
+                flat = (
+                    f"the period profile is flat (periodicity {cycle['periodicity']:.2f} < {floor:.3f}) in window [{lo},{hi}]"
                 )
+                if cycle_mode == "auto" and prof.one_shot_ok:
+                    # explicit, recorded failover: the action happened once (allowed for this state),
+                    # so cut rest -> excursion -> rest instead. The periodic attempt stays in the report.
+                    periodic_attempt = {**cycle, "window": [lo, hi], "why_rejected": flat}
+                    cycle = detect_one_shot(D, min_len=lo, max_len=max(hi, round(n * 0.9)), frame_mass=masses)
+                else:
+                    raise SystemExit(
+                        f"video-loop: no periodic cycle found — {flat}; the motion does not repeat, widen the window, "
+                        "regenerate the clip, or pass --cycle one-shot for a single performed action"
+                    )
+    except SystemExit as exc:
+        write_loop_report(target, {**report_base, "status": "failed", "error": str(exc),
+                                  "cycle": getattr(exc, "diagnostics", cycle),
+                                  "periodic_attempt": periodic_attempt})
+        raise
     i, L = cycle["start"], cycle["length"]
     # playback density, not a fixed count: a long cycle gets more frames so every state plays at
     # ~gif_fps (a fixed 12 made a 2.5 s jump hold each frame 210 ms while a 1.1 s walk held 90 ms)
@@ -706,10 +767,17 @@ def run_loop(
     gif_path = out_dir / f"{name}.gif"
     webp_path = out_dir / f"{name}.webp"
     if seam_ratio > seam_max:
-        raise SystemExit(
-            f"video-loop: loop seam ratio {seam_ratio:.2f} exceeds {seam_max} (period {L} frames from {i}); "
-            "the cycle does not close — widen the window, regenerate with an 'evenly paced, returns to start' prompt, or pass --seam-max"
+        error = (
+            f"video-loop: loop seam ratio {seam_ratio:.2f} exceeds {seam_max} "
+            f"({cycle['kind']} length {L} frames from {i}); the cycle does not close — "
+            "regenerate with a complete return to the starting pose"
         )
+        write_loop_report(target, {**report_base, "status": "failed", "error": error,
+                                  "cycle": cycle, "periodic_attempt": periodic_attempt,
+                                  "resampled_seam": resampled_seam,
+                                  "resampled_inner_mean_adjacent": resampled_adjacent,
+                                  "resampled_seam_ratio": seam_ratio})
+        raise SystemExit(error)
     save_clean_gif(pick, gif_path, duration_ms=delay_ms, loop=0, alpha_threshold=128)
     write_webp(pick, webp_path, delay_ms=delay_ms, workdir=out_dir / ".webp-frames")
     shutil.rmtree(out_dir / ".webp-frames", ignore_errors=True)
@@ -732,6 +800,9 @@ def run_loop(
         "n_out": n_out,
         "gif_fps": gif_fps,
         "delay_ms": delay_ms,
+        "status": "passed",
+        "resampled_seam": resampled_seam,
+        "resampled_inner_mean_adjacent": resampled_adjacent,
         "resampled_seam_ratio": round(seam_ratio, 4),
         "seam_max": seam_max,
         "scrubbed_rgb_pixels": scrubbed,
@@ -740,8 +811,7 @@ def run_loop(
         "gif": gif_report,
         "webp": webp_report,
     }
-    target = (report_path or (out_dir / f"{name}.loop.report.json")).expanduser().resolve()
-    atomic_write_text(target, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    write_loop_report(target, payload)
     payload["report"] = str(target)
     return payload
 
