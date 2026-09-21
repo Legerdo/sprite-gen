@@ -65,7 +65,7 @@ def test_moved_mass_admits_a_hop_the_mad_contrast_rejects(tmp_path: Path) -> Non
 def test_moved_mass_does_not_admit_a_jittering_stand(tmp_path: Path) -> None:
     files = _one_shot_frames(tmp_path, hop=(0, 0), jitter=4)
     D = loop_mod.distance_matrix(files)
-    with pytest.raises(SystemExit, match="moved 0\\.[0-3]"):
+    with pytest.raises(SystemExit, match="no complete one-shot return"):
         loop_mod.detect_one_shot(D, min_len=8, max_len=130, frame_mass=loop_mod.frame_masses(files))
 
 

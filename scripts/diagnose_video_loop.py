@@ -42,7 +42,11 @@ def measure(files: list[Path], fps: float, state: str) -> dict:
                        max_len=max(hi, round(n * .9)), frame_mass=mass)
     auto = periodic
     route = "periodic"
-    if periodic["ok"] and profile.periodic and periodic["cycle"]["periodicity"] < loop.PERIODICITY_MIN:
+    floor = loop.PERIODICITY_MIN
+    if periodic["ok"]:
+        floor = loop.periodicity_floor(n, periodic["cycle"]["period_global"], partial_repeat=profile.action_seconds is not None)
+        periodic["cycle"]["periodicity_min"] = floor
+    if periodic["ok"] and profile.periodic and periodic["cycle"]["periodicity"] < floor:
         if profile.one_shot_ok:
             auto, route = one_shot, "one-shot"
         else:
