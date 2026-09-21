@@ -26,7 +26,7 @@ Ask an image model for a "sprite sheet" and you know what you get: a character w
 
 `sprite-gen` is a Codex/Claude skill and a Python CLI that closes that gap. Give it **one base image** — it drives generation row by row, locks the character's identity, strips the chroma background to real alpha, extracts each pose as a clean transparent frame, and bakes a runtime atlas **with a machine-readable `manifest.json.frame_layout`**. Or hand the same still to a video model and get back a seamless, transparent loop per motion state. For the last 10% that generation never gets right, a **curation webview** lets you compare, reject, nudge and watch the loop live before you bake.
 
-For side sprites, `video-set` checks and mirrors opposite-facing inputs by default, keeping `--facing right|left` consistent across canvas and clip prompts. Use `gen --ref image.png --facing right --facing-fix mirror` to normalize a reference edit; `gen` otherwise preserves orientation. See [facing options](SKILL.md#side-view-facing).
+For side sprites, `video-set` uses `--facing right|left` consistently across canvas placement and clip prompts. Its direction detector is **record-only by default** (`--facing-fix none`) and can be wrong even at high confidence. Use `gen --ref image.png --facing right` to request orientation in the generation prompt; `gen` otherwise preserves orientation. Prompts request direction but cannot guarantee the result. Correction is opt-in: `--facing-fix mirror`, or `gen --facing-fix regen`; review the still before using either. See [facing options](SKILL.md#side-view-facing).
 
 ## Start with a request
 

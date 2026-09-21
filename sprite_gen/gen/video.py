@@ -197,7 +197,7 @@ class VideoRequest:
     reference_images: list[Path] = field(default_factory=list)
     direction: str | None = None
     facing: str = "right"
-    facing_fix: str = "mirror"
+    facing_fix: str = "none"
 
     @property
     def mode(self) -> str:
@@ -678,7 +678,7 @@ def _add_prompt_and_report(parser: argparse.ArgumentParser) -> None:
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--direction", choices=("side", "front", "back"), help="sprite view; side opts into facing inspection before video generation")
     parser.add_argument("--facing", choices=FACINGS, default="right", help="with --direction side: required direction (default right)")
-    parser.add_argument("--facing-fix", choices=facing_mod.FIXES, default="mirror", help="with --direction side: mirror an opposite-facing still, or none to only record")
+    parser.add_argument("--facing-fix", choices=facing_mod.FIXES, default="none", help="with --direction side: record only (none, default), or opt into mirror")
     parser.add_argument("--image", type=Path, help="the still to animate / the first frame (PNG/JPEG/WebP)")
     parser.add_argument("--last-frame", type=Path, help=f"pin the closing frame ({DEFAULT_MODEL} only); alone or with --image")
     parser.add_argument(

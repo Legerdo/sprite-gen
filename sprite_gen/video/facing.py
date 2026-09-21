@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Normalize a side-view video input before canvas placement; never edit its source."""
+"""Observe a side-view input; correction requires opt-in and never edits its source."""
 from __future__ import annotations
 
 import hashlib
@@ -27,9 +27,9 @@ class _Vision:
         return vision.grok_inspect(path, credential=self.credential, call=self.call)
 
 
-def prepare_still(source: Path, out: Path, *, facing: str = "right", fix: str = "mirror",
+def prepare_still(source: Path, out: Path, *, facing: str = "right", fix: str = "none",
                   credential: Credential | None = None, call: HttpCall | None = None) -> dict:
-    """Inspect exactly once on the video provider; publish a corrected PNG copy."""
+    """Inspect once on the video provider; copy unchanged unless correction is opted in."""
     policy.validate(facing, fix)
     if fix not in FIXES:
         raise SystemExit("video facing: expected mirror or none")
@@ -40,7 +40,7 @@ def prepare_still(source: Path, out: Path, *, facing: str = "right", fix: str = 
     observed = policy.inspect(_Vision(credential, call), out, out.parent)
     report = {**observed, "requested": facing, "fix": fix, "action": "none",
               "source": str(source), "source_sha256": digest(source), "out": str(out),
-              "final_direction": observed["direction"]}
+              "final_direction": observed["direction"], "final_direction_source": "observation"}
     opposite = "left" if facing == "right" else "right"
     if observed["direction"] == opposite and fix == "mirror":
         policy.mirror(out)

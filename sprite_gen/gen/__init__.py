@@ -245,7 +245,7 @@ def generate_image(
     *,
     refs: list[Path] | None = None,
     facing: str | None = None,
-    facing_fix: str = "mirror",
+    facing_fix: str = "none",
     model: str | None = None,
     aspect_ratio: str | None = None,
     quality: str | None = None,
@@ -513,7 +513,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--chroma-key", choices=sorted(chroma_mod.KEYS), default="magenta")
     parser.add_argument("--facing", choices=(*facing_mod.FACINGS, "preserve"), default="preserve", help="with --ref: required direction; preserve (default) leaves prompt and pixels unchanged")
-    parser.add_argument("--facing-fix", choices=facing_mod.FIXES, default="mirror", help="with --ref: correct an opposite-facing result by mirror (default), one regen, or none")
+    parser.add_argument("--facing-fix", choices=facing_mod.FIXES, default="none", help="with --ref and --facing: record only (none, default), or opt into mirror / one regen")
     parser.add_argument("--trim-alpha", action="store_true", help="with --transparent: crop the published PNG to its opaque bbox so the bottom edge is the foot line (margins reported)")
     parser.add_argument("--white-check", type=Path, help="write a white-composite check image")
     parser.add_argument("--keep-session", action="store_true", help="codex: do not delete the rollout jsonl")

@@ -23,9 +23,10 @@ def offline(monkeypatch):
     monkeypatch.setattr(batch, "_staggered_start", lambda gap: None)
 
 
+@pytest.mark.parametrize("options", [{}, {"facing_fix": "mirror"}])
 @pytest.mark.parametrize("facing", ["left", "right"])
 @pytest.mark.parametrize("direction", ["side", "front", "back"])
-def test_set_facing_reaches_both_real_canvas_and_prompt(tmp_path, offline, facing, direction):
+def test_set_facing_reaches_both_real_canvas_and_prompt(tmp_path, offline, facing, direction, options):
     prompts = []
     source_bytes = FIXTURE.read_bytes()
     def video(image, prompt, out, report, **kw):
@@ -35,13 +36,16 @@ def test_set_facing_reaches_both_real_canvas_and_prompt(tmp_path, offline, facin
         return 0
     result = batch.run_set(bases={direction: FIXTURE}, states=["attack"], root=tmp_path,
                            character=None, duration=3, resolution="720p", key="green",
-                           concurrency=1, force=False, gap=0, facing=facing, video_runner=video)
+                           concurrency=1, force=False, gap=0, facing=facing, video_runner=video, **options)
     assert result["ok"] == 1 and result["facing"] == facing
     assert FIXTURE.read_bytes() == source_bytes
     canvas = json.loads((tmp_path / f"{direction}-attack" / "canvas.report.json").read_text())
     if direction == "side":
         assert f"facing {facing}" in prompts[0]
-        assert result["items"][0]["facing"]["action"] == ("mirror" if facing == "right" else "none")
+        assert result["items"][0]["facing"]["action"] == ("mirror" if facing == "right" and options else "none")
+        if not options:
+            assert (tmp_path / "side.facing.png").read_bytes() == source_bytes
+            assert result["items"][0]["facing"]["final_direction_source"] == "observation"
         assert (canvas["offset"][0] > 0) == (facing == "left")
     else:
         assert "facing" not in result["items"][0]
@@ -71,7 +75,7 @@ def test_changed_facing_cannot_reuse_an_opposite_prompt_clip(tmp_path, offline, 
     assert (item / "canvas.png").read_bytes() == previous_canvas
     result = batch.run_item(**options)
     assert result["ok"] and result["clip"]["reused"] and len(calls) == 1
-    result = batch.run_item(**options, facing_fix="none")
+    result = batch.run_item(**options, facing_fix="mirror")
     assert not result["ok"] and "--force" in result["error"]
 
 
@@ -83,7 +87,7 @@ def test_cli_threads_facing_into_set(monkeypatch, tmp_path):
     monkeypatch.setattr(batch, "run_set", run_set)
     assert batch.main(["--base", f"side={FIXTURE}", "--states", "attack", "--out-dir", str(tmp_path),
                        "--facing", "left"]) == 0
-    assert seen[0]["facing"] == "left"
+    assert seen[0]["facing"] == "left" and seen[0]["facing_fix"] == "none"
 
 
 def test_parallel_states_share_one_inspection_of_the_side_still(tmp_path, offline, monkeypatch):
@@ -96,8 +100,23 @@ def test_parallel_states_share_one_inspection_of_the_side_still(tmp_path, offlin
         out.write_bytes(b"test-video")
         report.write_text(json.dumps({"prompt": prompt}))
         return 0
-    result = batch.run_set(bases={"side": FIXTURE}, states=["idle", "attack", "walk"], root=tmp_path,
+    source = FIXTURE.with_name("right.png")
+    result = batch.run_set(bases={"side": source}, states=["idle", "attack", "walk"], root=tmp_path,
                            character=None, duration=3, resolution="720p", key="green",
                            concurrency=3, force=False, gap=0, video_runner=video)
     assert result["ok"] == 3 and len(calls) == 1
     assert len({item["facing"]["out"] for item in result["items"]}) == 1
+    assert (tmp_path / "side.facing.png").read_bytes() == source.read_bytes()
+    assert all(item["facing"]["action"] == "none" and item["facing"]["requested"] == "right"
+               for item in result["items"])
+    assert result["facing_fix"] == "none"
+
+
+def test_tool_defaults_to_record_only(monkeypatch, tmp_path):
+    seen = []
+    def run_set(**kwargs):
+        seen.append(kwargs)
+        return {"failed": []}
+    monkeypatch.setattr(batch, "run_set", run_set)
+    assert batch.run(base=[f"side={FIXTURE}"], out_dir=tmp_path) == 0
+    assert seen[0]["facing_fix"] == "none"

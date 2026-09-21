@@ -84,13 +84,31 @@ def test_side_multi_input_refused_before_vision_or_video(tmp_path):
     assert not api.calls
 
 
-def test_video_cli_passes_side_policy(tmp_path, monkeypatch):
+@pytest.mark.parametrize("options", [[], ["--facing-fix", "none"]])
+def test_video_cli_passes_side_policy(tmp_path, monkeypatch, options):
     api = Api()
     monkeypatch.setattr(video, "resolve_credential", lambda: video.Credential("synthetic", "grok-login"))
     monkeypatch.setattr(video, "http_json", api.call)
     monkeypatch.setattr(video, "http_download", lambda *a: MP4)
     report = tmp_path / "report.json"
     assert video.main(["--image", str(FIXTURE), "--prompt", "idle", "--out", str(tmp_path / "out.mp4"),
-                       "--direction", "side", "--facing", "left", "--facing-fix", "none", "--report", str(report)]) == 0
+                       "--direction", "side", "--facing", "right", *options, "--report", str(report)]) == 0
     data = json.loads(report.read_text())
-    assert data["facing"]["requested"] == "left" and "facing left" in data["prompt"]
+    assert data["facing"]["requested"] == "right" and "facing right" in data["prompt"]
+    assert data["facing"]["fix"] == "none" and data["facing"]["action"] == "none"
+    uploaded = base64.b64decode(api.calls[1][3]["image"]["url"].split(",", 1)[1])
+    assert uploaded == FIXTURE.read_bytes()
+
+
+def test_default_video_preserves_bytes_despite_wrong_observation(tmp_path):
+    source = FIXTURE.with_name("right.png")
+    api = Api("left")
+    result = video.generate_video(video.VideoRequest(source, "idle", tmp_path / "out.mp4", direction="side"),
+                                  credential=video.Credential("synthetic", "grok-login"), call=api.call, download=lambda *a: MP4)
+    assert result.image.read_bytes() == source.read_bytes()
+    uploaded = base64.b64decode(api.calls[1][3]["image"]["url"].split(",", 1)[1])
+    assert uploaded == source.read_bytes()
+    assert result.facing["fix"] == "none" and result.facing["action"] == "none"
+    assert result.facing["final_direction"] == "left"
+    assert result.facing["final_direction_source"] == "observation"
+    assert result.facing["requested"] == "right" and "facing right" in result.prompt

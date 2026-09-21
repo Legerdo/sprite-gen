@@ -62,19 +62,23 @@ Pass choices already stated in the request. The guide checks access, combines ex
 ## Side-view facing
 
 Keep the side still, canvas placement and motion prompt facing the same direction.
-`video-set` checks each side input once before canvas placement, mirrors an opposite-facing copy,
-and uses `--facing` for both the canvas and clip prompt. The source image stays intact.
+`video-set` observes each side input once before canvas placement and uses the requested
+`--facing` for both the canvas and clip prompt. Observation is record-only by default;
+it never changes the requested direction. Image correction requires explicit opt-in.
 
 | Command option | Values and default | Behavior |
 |---|---|---|
 | `gen --facing` | `preserve` (default), `right`, `left` | With `--ref`, an explicit direction adds a prompt requirement and checks the generated still. |
-| `gen --facing-fix` | `mirror` (default), `regen`, `none` | Mirror an opposite result, regenerate once and recheck, or record without correction. A still-opposite regeneration is mirrored. |
+| `gen --facing-fix` | `none` (default), `mirror`, `regen` | Record without correction; opt into mirroring an observed opposite or regenerating once and rechecking. A still-opposite regeneration is mirrored. |
 | `video --direction` | `side`, `front`, `back`; unset by default | `side` opts into facing inspection and a matching prompt requirement; front/back skip it. |
 | `video --facing`, `video-set --facing` | `right` (default), `left` | Required side direction. |
-| `video --facing-fix`, `video-set --facing-fix` | `mirror` (default), `none` | Correct an opposite side input or only record the observation. Batch side inspection is enabled by default. |
+| `video --facing-fix`, `video-set --facing-fix` | `none` (default), `mirror` | Record the observation; opt into mirroring an observed opposite in a copy. Batch side inspection is enabled by default. |
 
-Generation reports record direction, model-reported confidence and correction under `extra.facing`;
-video reports and batch items use `facing`.
+Direction is requested through the generation and motion prompts, which cannot guarantee model compliance.
+The detector can be wrong even at high confidence: review the still before choosing `mirror` or `regen`.
+Generation reports record direction, model, requested direction, model-reported confidence and correction
+under `extra.facing`; video reports and batch items use `facing`. `final_direction` is an observation
+or a value derived from it, not independent verification; `final_direction_source` identifies which.
 An uncertain or failed inspection records `unknown` and its reason and continues without correction;
 front-facing observations also remain unchanged. Mirroring does not preserve left/right accessory handedness.
 

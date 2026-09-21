@@ -102,7 +102,7 @@ def run_item(
     anchor: str = "none",
     spill: str = "auto",
     facing: str = "right",
-    facing_fix: str = "mirror",
+    facing_fix: str = "none",
     prepare_side: Callable[[Path], tuple[Path, dict]] | None = None,
 ) -> dict[str, Any]:
     validate_facing(facing, facing_fix)
@@ -222,7 +222,7 @@ def run_set(
     anchor: str = "none",
     spill: str = "auto",
     facing: str = "right",
-    facing_fix: str = "mirror",
+    facing_fix: str = "none",
 ) -> dict[str, Any]:
     validate_facing(facing, facing_fix)
     if facing_fix not in facing_mod.FIXES:
@@ -276,7 +276,7 @@ def _parse_bases(values: list[str]) -> dict[str, Path]:
 def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--base", action="append", default=[], help="direction=still.png (repeatable: side=..., front=..., back=...)")
     parser.add_argument("--facing", choices=FACINGS, default="right", help="side-view facing for both prompt and canvas (default right); ignored for front/back")
-    parser.add_argument("--facing-fix", choices=facing_mod.FIXES, default="mirror", help="side inputs: mirror an opposite-facing still (default) or only record the observation")
+    parser.add_argument("--facing-fix", choices=facing_mod.FIXES, default="none", help="side inputs: record only (none, default), or opt into mirror")
     parser.add_argument("--states", default="idle,walk,run,jump,attack", help="comma list of motion states")
     parser.add_argument("--out-dir", required=True, type=Path, help="batch root; one folder per direction-state")
     parser.add_argument("--character", help="short subject phrase used in the prompts (e.g. 'The armored knight')")
@@ -298,7 +298,7 @@ def run(**kwargs: object) -> int:
         root=Path(str(kwargs["out_dir"])), character=kwargs.get("character"),  # type: ignore[arg-type]
         duration=int(kwargs.get("duration") or DEFAULT_DURATION_SECONDS), resolution=str(kwargs.get("resolution") or "720p"), key=str(kwargs.get("key") or "auto"),
         concurrency=int(kwargs.get("concurrency") or 3), force=bool(kwargs.get("force")), gap=float(kwargs.get("start_gap") or START_GAP_SECONDS),
-        facing=str(kwargs.get("facing") or "right"), facing_fix=str(kwargs.get("facing_fix") or "mirror"),
+        facing=str(kwargs.get("facing") or "right"), facing_fix=str(kwargs.get("facing_fix") or "none"),
         shape=(str(kwargs["shape"]) if kwargs.get("shape") else None), anchor=str(kwargs.get("anchor") or "none"), spill=str(kwargs.get("spill") or "auto"),
     )
     return 0 if not payload["failed"] else 1

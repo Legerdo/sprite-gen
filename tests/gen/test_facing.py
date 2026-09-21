@@ -19,14 +19,15 @@ class Backend:
     name = "openai"
     transparency = "native"
 
-    def __init__(self, direction="left", failure=None, regenerated_direction="right"):
+    def __init__(self, direction="left", failure=None, regenerated_direction="right", image_direction=None):
+        self.image_direction = image_direction or direction
         self.regenerated_direction = regenerated_direction
         self.direction, self.failure = direction, failure
         self.generations, self.inspections = [], []
 
     def generate(self, request, workdir):
         self.generations.append(request)
-        source = self.regenerated_direction if len(self.generations) > 1 else self.direction
+        source = self.regenerated_direction if len(self.generations) > 1 else self.image_direction
         if source == "unknown":
             source = "front"
         shutil.copyfile(FIXTURES / f"{source}.png", request.raw)
@@ -37,7 +38,7 @@ class Backend:
         if self.failure:
             raise self.failure
         direction = self.regenerated_direction if len(self.generations) > 1 else self.direction
-        return json.dumps({"direction": direction, "confidence": 0.95}), {"usage": {"input_tokens": 4}}
+        return json.dumps({"direction": direction, "confidence": 0.95}), {"model": "test-vision", "usage": {"input_tokens": 4}}
 
 
 def generate(tmp_path, monkeypatch, backend, **kwargs):
@@ -49,7 +50,7 @@ def generate(tmp_path, monkeypatch, backend, **kwargs):
 @pytest.mark.parametrize("direction", ["left", "right", "front"])
 def test_three_fixture_directions_only_opposite_is_mirrored(tmp_path, monkeypatch, direction):
     backend = Backend(direction)
-    result = generate(tmp_path, monkeypatch, backend)
+    result = generate(tmp_path, monkeypatch, backend, facing_fix="mirror")
     original = Image.open(FIXTURES / f"{direction}.png")
     expected = ImageOps.mirror(original) if direction == "left" else original
     assert Image.open(result.out).tobytes() == expected.tobytes()
@@ -62,7 +63,7 @@ def test_three_fixture_directions_only_opposite_is_mirrored(tmp_path, monkeypatc
 
 
 def test_left_request_mirrors_right_and_preserves_alpha_and_preview(tmp_path, monkeypatch):
-    result = generate(tmp_path, monkeypatch, Backend("right"), facing="left",
+    result = generate(tmp_path, monkeypatch, Backend("right"), facing="left", facing_fix="mirror",
                       transparent=True, alpha_mode="native", white_check=tmp_path / "white.png")
     original = Image.open(FIXTURES / "right.png")
     assert Image.open(result.out).tobytes() == ImageOps.mirror(original).tobytes()
@@ -72,10 +73,19 @@ def test_left_request_mirrors_right_and_preserves_alpha_and_preview(tmp_path, mo
     assert result.extra["facing"]["final_direction"] == "left"
 
 
-def test_none_is_byte_identical_and_records_mismatch(tmp_path, monkeypatch):
-    result = generate(tmp_path, monkeypatch, Backend(), facing_fix="none")
-    assert result.out.read_bytes() == (FIXTURES / "left.png").read_bytes()
-    assert result.extra["facing"]["reason"] == "correction-disabled"
+@pytest.mark.parametrize("options", [{}, {"facing_fix": "none"}])
+def test_default_and_none_preserve_bytes_despite_wrong_observation(tmp_path, monkeypatch, options):
+    backend = Backend("left", image_direction="right")
+    result = generate(tmp_path, monkeypatch, backend, **options)
+    assert result.out.read_bytes() == result.raw.read_bytes() == (FIXTURES / "right.png").read_bytes()
+    report = result.extra["facing"]
+    assert report["fix"] == "none" and report["action"] == "none"
+    assert report["reason"] == "correction-disabled"
+    assert report["direction"] == report["final_direction"] == "left"
+    assert report["final_direction_source"] == "observation"
+    assert report["requested"] == "right" and report["model"] == "test-vision"
+    assert len(backend.generations) == len(backend.inspections) == 1
+    assert "facing right" in result.prompt
 
 
 @pytest.mark.parametrize("failure", [RuntimeError("private"), SystemExit("private")])
@@ -106,6 +116,7 @@ def test_regen_rechecks_once_and_mirrors_only_a_known_opposite(tmp_path, monkeyp
     assert report["regeneration"]["recheck"]["usage"] == {"input_tokens": 4}
     assert report.get("fallback") == ("mirror" if rechecked == "left" else None)
     assert report["final_direction"] == ("right" if rechecked in ("left", "right") else rechecked)
+    assert report["final_direction_source"] == ("mirror-of-recheck" if rechecked == "left" else "regeneration-recheck")
     if rechecked in ("unknown", "front"):
         assert report["reason"].startswith("regeneration-facing-unresolved:")
 
@@ -220,15 +231,18 @@ def test_codex_vision_reads_new_answer_and_scrubs_identity(monkeypatch, tmp_path
     assert not list(tmp_path.iterdir())
 
 
-def test_cli_options_reach_report(tmp_path, monkeypatch):
+@pytest.mark.parametrize("options", [[], ["--facing-fix", "none"]])
+def test_cli_options_reach_report(tmp_path, monkeypatch, options):
     backend = Backend("right")
     monkeypatch.setattr(gen, "_make_provider", lambda *a, **kw: backend)
     report = tmp_path / "report.json"
     assert gen.main(["--provider", "openai", "--prompt", "robot", "--ref", str(FIXTURES / "right.png"),
                      "--out", str(tmp_path / "out.png"), "--report", str(report),
-                     "--facing", "left", "--facing-fix", "none"]) == 0
+                     "--facing", "left", *options]) == 0
     facing_report = json.loads(report.read_text())["extra"]["facing"]
     assert facing_report["requested"] == "left" and facing_report["action"] == "none"
+    assert facing_report["fix"] == "none"
+    assert (tmp_path / "out.png").read_bytes() == (FIXTURES / "right.png").read_bytes()
 
 
 def test_regeneration_recheck_failure_preserves_regenerated_image(tmp_path, monkeypatch):

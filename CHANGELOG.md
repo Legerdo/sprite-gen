@@ -2,12 +2,14 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
-## v2.5.3 - Consistent reference and video facing
+## v2.5.3 - Reference and video facing controls
 
-- Reference edits can opt into `gen --facing right|left` and `--facing-fix mirror|regen|none`. The default `preserve` leaves existing generation callers unchanged. Regeneration runs once, rechecks direction and mirrors a remaining opposite result.
-- `video --direction side` and batch side inputs inspect the still before animation. Batch uses one shared check per side still and matches the corrected canvas with the motion prompt. Original inputs stay intact; cached canvases and prompts must match the requested facing.
-- Direction reports include model-reported confidence and correction evidence. Failed or uncertain vision calls record `unknown` with a reason and continue without correction. Front-facing observations are unchanged; accessory handedness is not corrected.
-- Synthetic tests cover direction parsing, exact mirrored pixels, regeneration rechecks, prompt/canvas agreement and existing callers.
+- Reference edits can opt into `gen --facing right|left` to request orientation in the generation prompt. The default `preserve` leaves existing generation callers unchanged.
+- Facing inspection is **record-only by default**: `gen`, `video` and `video-set` use `--facing-fix none`. Explicit `mirror` corrects an observed opposite in the output copy; `gen --facing-fix regen` regenerates once, rechecks and mirrors a remaining observed opposite.
+- `video --direction side` and batch side inputs inspect the still before animation. Batch uses one shared observation per side still; the requested facing drives canvas placement and motion prompts independently of the observation. Original inputs stay intact; cached canvases and prompts must match the requested policy.
+- Direction reports include model, requested direction, model-reported confidence and correction evidence. `final_direction_source` distinguishes observations from values derived by mirroring; none is independent verification. Failed or uncertain calls record `unknown` with a reason and continue without correction.
+- Known limitation: direction detectors can misclassify a correctly oriented still even at high confidence. Prompts request direction but cannot guarantee it; inspect the still before opting into correction. Front-facing observations are unchanged, and mirroring does not preserve accessory handedness.
+- Synthetic regressions cover incorrect observations with byte-preserving defaults, explicit mirror pixel symmetry, regeneration rechecks, prompt/canvas agreement and existing callers.
 
 ## v2.5.2 - Cleaner video spill correction
 

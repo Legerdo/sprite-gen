@@ -26,7 +26,7 @@
 
 `sprite-gen` 은 그 간극을 메우는 Codex/Claude 스킬이자 Python CLI 다. **기본 이미지 한 장**을 주면 행 단위로 생성을 이끌고, 캐릭터의 아이덴티티를 고정하고, 크로마 배경을 벗겨 진짜 알파로 만들고, 각 포즈를 깨끗한 투명 프레임으로 추출한 뒤, **기계가 읽을 수 있는 `manifest.json.frame_layout`** 과 함께 런타임 아틀라스를 굽는다. 또는 같은 정지 이미지를 비디오 모델에 넘겨 모션 상태별로 이음매 없는 투명 루프를 받을 수도 있다. 생성이 끝내 해결하지 못하는 마지막 10% 를 위해, **큐레이션 웹뷰**가 굽기 전에 비교·거부·미세 조정하고 루프를 실시간으로 확인하게 해준다.
 
-측면 스프라이트는 `video-set`이 기본으로 방향을 검사하고 반대 방향이면 사본을 좌우 반전해 캔버스와 클립 프롬프트의 `--facing right|left`를 맞춘다. 참고 이미지 편집부터 맞추려면 `gen --ref image.png --facing right --facing-fix mirror`를 쓴다. `gen`의 기본값은 방향 보존이다. [방향 옵션](SKILL.md#side-view-facing).
+측면 스프라이트는 `video-set`의 `--facing right|left`를 캔버스 배치와 클립 프롬프트에 일관되게 사용한다. 방향 판정기는 **기본적으로 기록만 남기며**(`--facing-fix none`), 높은 신뢰도에서도 틀릴 수 있다. `gen --ref image.png --facing right`는 생성 문장으로 방향을 요구한다. `gen`의 방향 기본값은 보존이며, 문장만으로 결과를 보장할 수는 없다. 보정은 `--facing-fix mirror` 또는 `gen --facing-fix regen`을 명시해야 하므로 먼저 스틸을 확인한다. [방향 옵션](SKILL.md#side-view-facing).
 
 ## 요청으로 시작하기
 

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Reference-facing policy: observe, correct once, and recheck regeneration.
+"""Reference-facing policy: observe by default; opt into correction and recheck.
 
 Confidence is the model's self-report, not a calibrated probability. A one-word
 answer has no confidence measurement and is recorded with confidence=None.
@@ -37,7 +37,7 @@ INSPECTION_PROMPT = (
 )
 
 
-def validate(facing: str, fix: str = "mirror") -> None:
+def validate(facing: str, fix: str = "none") -> None:
     if facing not in FACINGS:
         raise SystemExit(f"facing: expected right or left, got {facing!r}")
     if fix not in FIXES:
@@ -94,6 +94,7 @@ def inspect(backend, path: Path, workdir: Path) -> dict:
         # Provider bodies may echo a key or input. Report the failure class only.
         observation = {"direction": "unknown", "confidence": None,
                        "reason": f"vision-call-failed:{type(exc).__name__}"}
+    observation.setdefault("model", None)
     if observation["direction"] == "unknown":
         observation.setdefault("reason", "vision-uncertain")
         print(f"[gen] facing unknown: {observation['reason']}; no correction", file=sys.stderr)
@@ -108,7 +109,7 @@ def prepare_correction(backend, request, run, workdir: Path, *, facing: str, fix
     """
     observation = inspect(backend, request.raw, workdir)
     report = {**observation, "requested": facing, "fix": fix, "action": "none",
-              "final_direction": observation["direction"]}
+              "final_direction": observation["direction"], "final_direction_source": "observation"}
     opposite = "left" if facing == "right" else "right"
     if observation["direction"] != opposite:
         report.setdefault("reason", "already-matched" if observation["direction"] == facing else "not-lateral")
@@ -127,14 +128,13 @@ def prepare_correction(backend, request, run, workdir: Path, *, facing: str, fix
         # original generation, so existing consumers don't see a different shape.
         recheck = inspect(backend, regenerated, workdir)
         report.update(action="regen", final_direction=recheck["direction"],
+                      final_direction_source="regeneration-recheck",
                       regeneration={"model": retry_run.model, "elapsed_seconds": retry_run.elapsed_seconds,
                                     "prompt": retry_request.prompt, "extra": retry_run.extra, "recheck": recheck})
         if recheck["direction"] == opposite:
             report.update(fallback="mirror", final_direction=facing,
                           final_direction_source="mirror-of-recheck")
-        elif recheck["direction"] == facing:
-            report["final_direction_source"] = "regeneration-recheck"
-        else:
+        elif recheck["direction"] != facing:
             report["reason"] = "regeneration-facing-unresolved:" + recheck.get("reason", "not-lateral")
         request = retry_request
         run = replace(run, elapsed_seconds=run.elapsed_seconds + retry_run.elapsed_seconds)

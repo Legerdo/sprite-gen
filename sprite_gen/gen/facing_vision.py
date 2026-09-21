@@ -15,7 +15,7 @@ from pathlib import Path
 from .base import GEN_TIMEOUT_SECONDS, provider_binary, provider_subprocess_env
 from .facing import INSPECTION_PROMPT
 
-OPENAI_MODEL = "gpt-4.1"
+OPENAI_MODEL = "gpt-4.1-mini"
 GROK_MODEL = "grok-4.6"
 
 
