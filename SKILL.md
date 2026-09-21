@@ -59,6 +59,25 @@ $SPRITE_GEN_ROOT/.venv/bin/sprite-gen workflow --kind image
 
 Pass choices already stated in the request. The guide checks access, combines explicit choices with saved defaults, and returns only missing questions. Follow its start and finish stages. Always pass the resolved provider explicitly to generation tools. Deliver checked files before offering the curation view; save defaults only when the user agrees. The complete conversation and settings contract is owned by the linked document, not duplicated in individual pipeline docs.
 
+## Side-view facing
+
+Keep the side still, canvas placement and motion prompt facing the same direction.
+`video-set` checks each side input once before canvas placement, mirrors an opposite-facing copy,
+and uses `--facing` for both the canvas and clip prompt. The source image stays intact.
+
+| Command option | Values and default | Behavior |
+|---|---|---|
+| `gen --facing` | `preserve` (default), `right`, `left` | With `--ref`, an explicit direction adds a prompt requirement and checks the generated still. |
+| `gen --facing-fix` | `mirror` (default), `regen`, `none` | Mirror an opposite result, regenerate once and recheck, or record without correction. A still-opposite regeneration is mirrored. |
+| `video --direction` | `side`, `front`, `back`; unset by default | `side` opts into facing inspection and a matching prompt requirement; front/back skip it. |
+| `video --facing`, `video-set --facing` | `right` (default), `left` | Required side direction. |
+| `video --facing-fix`, `video-set --facing-fix` | `mirror` (default), `none` | Correct an opposite side input or only record the observation. Batch side inspection is enabled by default. |
+
+Generation reports record direction, model-reported confidence and correction under `extra.facing`;
+video reports and batch items use `facing`.
+An uncertain or failed inspection records `unknown` and its reason and continues without correction;
+front-facing observations also remain unchanged. Mirroring does not preserve left/right accessory handedness.
+
 ## Execution routes
 
 | Task | Entry | Contract |

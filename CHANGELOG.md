@@ -2,6 +2,13 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## v2.5.3 - Consistent reference and video facing
+
+- Reference edits can opt into `gen --facing right|left` and `--facing-fix mirror|regen|none`. The default `preserve` leaves existing generation callers unchanged. Regeneration runs once, rechecks direction and mirrors a remaining opposite result.
+- `video --direction side` and batch side inputs inspect the still before animation. Batch uses one shared check per side still and matches the corrected canvas with the motion prompt. Original inputs stay intact; cached canvases and prompts must match the requested facing.
+- Direction reports include model-reported confidence and correction evidence. Failed or uncertain vision calls record `unknown` with a reason and continue without correction. Front-facing observations are unchanged; accessory handedness is not corrected.
+- Synthetic tests cover direction parsing, exact mirrored pixels, regeneration rechecks, prompt/canvas agreement and existing callers.
+
 ## v2.5.2 - Cleaner video spill correction
 
 - Automatic spill selection distinguishes the key hue from yellow/cyan or red/blue material and discounts dark contamination in the reference matte edge band. Bright key-coloured details still count as material.
