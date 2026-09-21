@@ -46,7 +46,7 @@ MOTION_TEXT = {
     "walk": "moves in place on a treadmill: a steady locomotion cycle for this body type with clear repeating ground contacts and an even left-right or front-back rhythm the body already has.",
     "run": "moves in place on a treadmill: a fast locomotion cycle for this body type with a bounding rhythm and clear repeating ground contacts.",
     "jump": "performs a modest vertical hop in place over and over: compress, spring up about half the body height, land softly, return to the exact starting stance, repeat at an even rhythm. Same height every time.",
-    "attack": "performs the same melee attack over and over: one clean strike in front, then returns to the exact ready stance, repeating at an even rhythm.",
+    "attack": "performs the same melee attack over and over with the weapon it is already holding (bare hands only if it holds nothing), keeping every piece of its gear and outfit exactly as drawn: one clean strike in front, then returns to the exact ready stance, repeating at an even rhythm.",
     "cheer": "celebrates in place: rises into a raised, spread-out cheer pose, holds it for a beat, then settles back to the exact starting stance, repeating at an even rhythm.",
     "wave": "waves in place: lifts one side into a friendly wave, sways it a few times, then settles back to the exact starting stance, repeating at an even rhythm.",
 }
