@@ -102,7 +102,7 @@ def render(files: list[Path], data: dict, out: Path) -> None:
     chart = Image.new("RGB", (1200, 650), "white")
     draw = ImageDraw.Draw(chart)
     series = [("Distance from first / medoid / adjacent", [data["distance_from_first"], data["distance_from_medoid"], data["adjacent"]]),
-              ("Lag profile (all lags; production window marked)", [[w["profile"] or 0 for w in data["windows"]]]),
+              ("Lag profile (all lags; production window marked)", [[w["profile"] for w in data["windows"] if w["profile"] is not None]]),
               ("Best seam ratio by window length (clipped at 10); red = gate 2", [[min(10, w["ratio"]) for w in data["windows"]]])]
     for row, (title, curves) in enumerate(series):
         top, bottom = 25+row*210, 195+row*210
@@ -117,10 +117,10 @@ def render(files: list[Path], data: dict, out: Path) -> None:
             draw.line((60,y,1170,y),fill="red")
         if row > 0:
             for bound in data["window"]:
-                x = 60+(bound-4)/(len(data["windows"])-1)*1110
+                x = 60+(bound-4)/(len(curves[0])-1)*1110
                 draw.line((x,top+35,x,bottom),fill="gray")
         draw.text((60,bottom+2), "0" if row == 0 else "4",fill="black")
-        draw.text((1130,bottom+2),str(data["frames"]-1 if row == 0 else data["frames"]),fill="black")
+        draw.text((1130,bottom+2),str(data["frames"]-1 if row < 2 else data["frames"]),fill="black")
     chart.save(out / "curves.png")
 
 
