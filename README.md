@@ -28,6 +28,14 @@ Ask an image model for a "sprite sheet" and you know what you get: a character w
 
 For side sprites, `video-set` uses `--facing right|left` consistently across canvas placement and clip prompts. Its direction detector is **record-only by default** (`--facing-fix none`) and can be wrong even at high confidence. Use `gen --ref image.png --facing right` to request orientation in the generation prompt; `gen` otherwise preserves orientation. Prompts request direction but cannot guarantee the result. Correction is opt-in: `--facing-fix mirror`, or `gen --facing-fix regen`; review the still before using either. See [facing options](SKILL.md#side-view-facing).
 
+<p align="center">
+  <img src="docs/assets/attack-claudecy-katana.gif" height="160" alt="Katana slash loop">
+  <img src="docs/assets/attack-slime.gif" height="160" alt="Slime attack loop">
+  <img src="docs/assets/attack-fox-hood.gif" height="160" alt="Hooded fox attack loop">
+  <img src="docs/assets/attack-paladin.gif" height="160" alt="Paladin attack loop">
+</p>
+<p align="center"><sub>v2.5.3 attack loops straight out of the video pipeline: one still each, Grok Imagine clip, frames gate, automatic loop selection. No manual cut points.</sub></p>
+
 ## Start with a request
 
 Ask for **sprites** or **an image**. The agent checks access, asks only for missing provider/motion choices, runs the existing pipeline, and delivers the files. The curation view is optional. Save your choices once to reuse separate sprite and image defaults; a one-off request does not overwrite them. [User workflow and defaults](docs/user-workflow.md).
