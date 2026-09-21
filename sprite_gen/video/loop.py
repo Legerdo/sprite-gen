@@ -312,7 +312,6 @@ def detect_one_shot(D: np.ndarray, *, min_len: int, max_len: int, frame_mass: np
     n = len(D)
     adjacent = np.diag(D, 1)
     candidates = []
-    rejected_edges = 0
     max_moved = 0.0
     for start in range(n - ONE_SHOT_MIN_LEN + 1):
         for end in range(start + ONE_SHOT_MIN_LEN - 1, min(n, start + max_len)):
@@ -344,15 +343,9 @@ def detect_one_shot(D: np.ndarray, *, min_len: int, max_len: int, frame_mass: np
                 a -= 1
             while b + 1 < n and active[b + 1]:
                 b += 1
-            if a == 0 or b == n - 1:
-                rejected_edges += 1
-                continue
             if b - a + 1 < ONE_SHOT_MIN_ACTIVE:
                 continue
             if not (start <= a - ONE_SHOT_PAD and end >= b + ONE_SHOT_PAD):
-                continue
-            # An endpoint inside another excursion is not a rest witness.
-            if active[start] or active[end]:
                 continue
             inner = float(adjacent[start:end].mean())
             if inner <= 0 or departure < ONE_SHOT_MIN_COHERENCE * inner:
@@ -374,15 +367,15 @@ def detect_one_shot(D: np.ndarray, *, min_len: int, max_len: int, frame_mass: np
         raise CycleSelectionError(
             f"video-loop: no complete one-shot return — the clip never leaves its rest pose "
             f"and returns with observed endpoints (moved {max_moved:.2f}, "
-            f"need {ONE_SHOT_MIN_MOVED}; boundary excursions refused: {rejected_edges})",
-            {"kind": "one-shot", "candidates": [], "boundary_excursions_refused": rejected_edges},
+            f"need {ONE_SHOT_MIN_MOVED})",
+            {"kind": "one-shot", "candidates": []},
         )
     # Keep the full strongest action, then minimise excess rest. Do not choose a
     # tiny low-seam twitch just because its endpoints happen to match exactly.
     strongest = max(c["departure"] for c in candidates)
     eligible = [c for c in candidates if c["departure"] >= strongest * 0.95]
     best = min(eligible, key=lambda c: (c["length"], c["ratio"], c["start"]))
-    return {**best, "candidates": candidates, "boundary_excursions_refused": rejected_edges}
+    return {**best, "candidates": candidates}
 
 
 def fixed_cycle(D: np.ndarray, *, start: int, length: int) -> dict[str, Any]:

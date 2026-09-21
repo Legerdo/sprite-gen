@@ -1,18 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """Measure existing keyed frames without changing loop selection or acceptance.
 
-Run from the repository with PYTHONPATH=. using its Python environment. Outputs
+Run using the repository's Python environment. Outputs
 are private diagnostic artifacts: keep them outside the repository when inputs
 are private. Frame indices are zero-based. Wide-window candidates are evidence,
 not accepted animations: low seam alone cannot establish a complete action.
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import hashlib
 import json
 import math
-from pathlib import Path
 
 from PIL import Image, ImageDraw
 
