@@ -62,7 +62,9 @@ def test_wide_canvas_puts_room_in_front_of_the_facing(tmp_path: Path) -> None:
     still = Image.open(_still(tmp_path))
     right, rep_r = canvas_mod.pad_canvas(still, canvas_mod.profile_for("attack"), facing="right")
     left, rep_l = canvas_mod.pad_canvas(still, canvas_mod.profile_for("attack"), facing="left")
-    assert rep_r["offset"][0] == 0 and rep_l["offset"][0] == left.width - 120
+    behind = round(right.width * rep_r["trail"])
+    assert behind > 0 and rep_r["offset"][0] == behind and rep_l["offset"][0] == left.width - 120 - behind
+    assert right.width - 120 - behind > behind  # more room in front than behind
     assert abs(right.width / right.height - 16 / 9) < 0.02
 
 
@@ -80,9 +82,9 @@ def test_attack_canvas_reserves_overhead_room_and_reports_placement(tmp_path: Pa
     assert image.crop((x, y, x + 120, y + 160)).tobytes() == Image.open(still).tobytes()
     assert image.crop((0, 0, image.width, y)).getextrema() == ((0, 0), (255, 255), (0, 0))
     assert json.loads(report.read_text()) == rep
-    assert rep["why"] == "weapon swings rise overhead and extend in front"
-    # An explicit zero still gives the pre-headroom wide layout.
-    zero, zero_rep = canvas_mod.pad_canvas(Image.open(still), canvas_mod.profile_for("attack"), headroom=0)
+    assert rep["why"] == "weapon swings rise overhead and extend in front; a long weapon drawn back reaches behind"
+    # Explicit zeros still give the pre-headroom, pre-trail wide layout.
+    zero, zero_rep = canvas_mod.pad_canvas(Image.open(still), canvas_mod.profile_for("attack"), headroom=0, trail=0)
     assert zero.size == (284, 160) and zero_rep["offset"] == [0, 0]
 
 
