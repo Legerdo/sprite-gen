@@ -2,6 +2,10 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## Unreleased (v2.5.5)
+
+- Gait loop selection no longer keeps a lone step. When the deepest repeat sits under the gait floor and no repeat near twice it is about as good, `video-loop` refuses with `no periodic cycle found` (the same words as a flat profile) instead of looping half a stride; the failure report carries the guard's verdict and the minima it weighed. A quadruped whose near and far legs read alike produced exactly this on a walk clip. The doubled period is now searched among the profile's own minima within three frames of twice the step, since a real stride rarely lands on exactly 2x. Clips whose full gait repeats are selected as before.
+
 ## v2.5.4 - Room behind the attack canvas
 
 - Attack canvases keep 20 % of their width empty behind the subject (`--trail`, a new wide-canvas margin next to `--lead`). A long weapon drawn back before the strike reached the back edge of the old layout and the frames gate refused the clip; the samurai and katana samples that needed hand-padded stills in v2.5.3 now pass from the raw still. Headroom, lead and every other profile are unchanged, and `--trail 0` restores the previous placement.
