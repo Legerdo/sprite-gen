@@ -2,7 +2,7 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
-## Unreleased (v2.5.5)
+## v2.5.5 - A lone step under the gait floor is refused, not looped
 
 - Gait loop selection no longer keeps a lone step. When the deepest repeat sits under the gait floor and no repeat near twice it is about as good, `video-loop` refuses with `no periodic cycle found` (the same words as a flat profile) instead of looping half a stride; the failure report carries the guard's verdict and the minima it weighed. A quadruped whose near and far legs read alike produced exactly this on a walk clip. The doubled period is now searched among the profile's own minima within three frames of twice the step, since a real stride rarely lands on exactly 2x. Clips whose full gait repeats are selected as before.
 
