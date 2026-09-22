@@ -2,7 +2,7 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
-## Unreleased (v2.5.6)
+## v2.5.6 - Walk and run loops close their wrap with one ramp
 
 - Walk and run loops close their wrap with one ramp. `video-loop --anchor body` (now the default for `walk` and `run`) measures how far the last frame's head and torso sit from the first's, once, by whole-pixel registration over the top of the first frame's box, and shifts frame k by that offset times k/L. It never fits frame by frame: per-frame fitting turns a head bob into a full-body shiver, and the feet anchor pins the planted foot, which a quadruped moves every step. A cycle whose wrap already lands (most bipeds) is left byte-identical; the strip sidecar records `wrap_dx_px` and `seam_ratio_after_anchor`. `--anchor feet` and `--anchor none` are unchanged, and other states keep `none`.
 
