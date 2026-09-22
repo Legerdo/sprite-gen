@@ -267,7 +267,10 @@ def _parse_bases(values: list[str]) -> dict[str, Path]:
         if "=" not in v:
             raise SystemExit(f"video-set: --base expects direction=path, got {v!r}")
         d, p = v.split("=", 1)
-        bases[d.strip()] = Path(p).expanduser().resolve()
+        d = d.strip()
+        if d not in VIEW_TEXT:
+            raise SystemExit(f"video-set: --base direction must be one of {', '.join(sorted(VIEW_TEXT))}, got {d!r}")
+        bases[d] = Path(p).expanduser().resolve()
     if not bases:
         raise SystemExit("video-set: at least one --base direction=path is required")
     return bases

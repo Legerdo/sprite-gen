@@ -36,12 +36,13 @@ is a property of the motion state, owned by one table (`STATE_CANVAS`):
 | State | Shape | Ratio | Room | Why |
 |---|---|---|---|---|
 | `jump` | tall | 3:4 | 34 % head-room above the still | airborne frames need height |
-| `attack` | wide | 16:9 | 35 % above the still, at least 28 % in front (facing side) | weapon swings rise overhead and extend in front |
+| `attack` | wide | 16:9 | 35 % above the still, at least 28 % in front (facing side), 20 % behind | weapon swings rise overhead and extend in front; a long weapon drawn back reaches behind |
 | `projectile` | wide | 16:9 | 34 % in front | the projectile travels away |
 | everything else | square | 1:1 | — | in-place motion fits the still |
 
-`--shape tall|wide|square` overrides the row; `--headroom` / `--lead` tune the room;
-`--facing left` mirrors the wide layout. Headroom is a fraction of the full canvas
+`--shape tall|wide|square` overrides the row; `--headroom` / `--lead` / `--trail` tune the room
+(`--trail` is the empty fraction of the width kept behind the subject, for a weapon drawn
+back before the strike); `--facing left` mirrors the wide layout. Headroom is a fraction of the full canvas
 height; wide canvases grow both dimensions to preserve their ratio without shrinking
 the still. A still whose corners are not one flat colour
 is refused — a non-flat background cannot be extended without guessing.

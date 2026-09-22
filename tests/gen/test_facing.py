@@ -218,7 +218,7 @@ def test_rest_rejection_is_unknown_without_retry(monkeypatch, tmp_path):
 
 def test_codex_vision_reads_new_answer_and_scrubs_identity(monkeypatch, tmp_path):
     seen = []
-    monkeypatch.setenv("KUMA_MEMBER_ID", "synthetic")
+    monkeypatch.setenv("ORCHESTRATOR_MEMBER_ID", "synthetic")
     def run(command, **kwargs):
         seen.append((command, kwargs))
         Path(command[command.index("-o") + 1]).write_text('right')
@@ -227,7 +227,7 @@ def test_codex_vision_reads_new_answer_and_scrubs_identity(monkeypatch, tmp_path
     text, metadata = facing_vision.codex_inspect(FIXTURES / "left.png", tmp_path)
     assert text == "right" and metadata["auth_source"] == "codex-login"
     assert len(seen) == 1 and "--ephemeral" in seen[0][0] and "read-only" in seen[0][0]
-    assert "KUMA_MEMBER_ID" not in seen[0][1]["env"]
+    assert "ORCHESTRATOR_MEMBER_ID" not in seen[0][1]["env"]
     assert not list(tmp_path.iterdir())
 
 
