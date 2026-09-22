@@ -67,6 +67,7 @@ ONE_SHOT_MIN_LEN = 4  # a one-shot's length is the clip's own fact; only a degen
 # taken when it repeats about as well. The cost is asymmetric — a wrongly doubled cycle
 # is still a clean two-cycle loop, a halved one walks on one leg.
 GAIT_DOUBLE_TOL = 0.25
+GAIT_DOUBLE_SEARCH = 3  # frames either side of 2x the step where the full gait's own minimum may sit
 GAIT_NEAR_EXACT_STEP_FRACTION = 0.10  # no ambiguity extension when repeat error is tiny compared with a playback step
 ANCHOR_MODES = ("none", "feet")
 FOOT_BAND = 0.08  # fraction of the frame's own height, measured up from its lowest opaque row
@@ -204,14 +205,35 @@ def detect_cycle(D: np.ndarray, *, min_len: int, max_len: int, gait_floor: int |
     period = min(L for L in cands if prof[L] <= deepest * 1.15 + 1e-4)  # abs floor: exact repeats sit at ~0
     guard: dict[str, Any] = {"applied": False}
     if gait_floor is not None and period < gait_floor:
-        doubles = [L for L in (2 * period - 1, 2 * period, 2 * period + 1) if L in prof and L <= max_len]
-        if doubles:
-            L2 = min(doubles, key=lambda L: prof[L])
-            if prof[L2] <= prof[period] * (1 + GAIT_DOUBLE_TOL) + 1e-4:
-                guard = {"applied": True, "from": period, "to": L2, "gait_floor": gait_floor, "depth_ratio": round(prof[L2] / prof[period], 3) if prof[period] > 0 else None}
-                period = L2
-            else:
-                guard = {"applied": False, "below_floor": period, "gait_floor": gait_floor, "why": "the doubled period repeats too much worse to be the same gait"}
+        # A period under the gait floor is one step, not a gait. The full gait is the
+        # repeat at about twice that; the profile's own minimum near 2x (within
+        # GAIT_DOUBLE_SEARCH) is the candidate, since a real cycle rarely lands on
+        # exactly 2p. If no such repeat exists, the clip holds one step only — a
+        # quadruped whose near and far legs read alike does this — and keeping the
+        # step would loop half a stride without a word. Refuse instead, under the
+        # same words as a flat profile, so a caller's regenerate-on-no-period rule
+        # covers both.
+        doubles = [L for L in cands if abs(L - 2 * period) <= GAIT_DOUBLE_SEARCH and L <= max_len]
+        if not doubles:
+            doubles = [L for L in (2 * period - 1, 2 * period, 2 * period + 1) if L in prof and L <= max_len]
+        L2 = min(doubles, key=lambda L: prof[L]) if doubles else None
+        if L2 is not None and prof[L2] <= prof[period] * (1 + GAIT_DOUBLE_TOL) + 1e-4:
+            guard = {"applied": True, "from": period, "to": L2, "gait_floor": gait_floor, "depth_ratio": round(prof[L2] / prof[period], 3) if prof[period] > 0 else None}
+            period = L2
+        else:
+            guard = {"applied": False, "below_floor": period, "gait_floor": gait_floor,
+                     "double_candidate": L2, "double_depth_ratio": round(prof[L2] / prof[period], 3) if L2 is not None and prof[period] > 0 else None,
+                     "why": "the only repeat is one step: nothing near twice the period repeats about as well"}
+            exc = SystemExit(
+                f"video-loop: no periodic cycle found — the only repeat is one step ({period} frames, under the gait floor of "
+                f"{gait_floor}) and nothing near twice that ({2 * period - GAIT_DOUBLE_SEARCH}..{2 * period + GAIT_DOUBLE_SEARCH}) "
+                f"repeats within {round(GAIT_DOUBLE_TOL * 100)} % of it"
+                + (f" (best {L2}: {round(prof[L2] / prof[period], 2)}x worse)" if L2 is not None and prof[period] > 0 else "")
+                + "; the clip shows a half stride, regenerate it"
+            )
+            exc.diagnostics = {"kind": "periodic", "period_global": period, "half_period_guard": guard,
+                               "profile_minima": [[L, round(prof[L], 5)] for L in sorted(cands, key=lambda L: prof[L])[:6]]}
+            raise exc
     # A plausible duration does not prove that a gait contains both phases. If a
     # second local minimum at twice the period is similarly good, retain both
     # occurrences at the original fps. This is a conservative ambiguity policy,
