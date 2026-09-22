@@ -2,6 +2,12 @@
 
 All notable public changes to `sprite-gen` are recorded here. Versions track the `version:` field in `SKILL.md` and `pyproject.toml`.
 
+## Unreleased (v2.5.4)
+
+- Attack canvases keep 20 % of their width empty behind the subject (`--trail`, a new wide-canvas margin next to `--lead`). A long weapon drawn back before the strike reached the back edge of the old layout and the frames gate refused the clip; the samurai and katana samples that needed hand-padded stills in v2.5.3 now pass from the raw still. Headroom, lead and every other profile are unchanged, and `--trail 0` restores the previous placement.
+- `video-set --base` refuses a direction the prompt table does not know (`back`, `front`, `side`) instead of accepting `left=` and animating it with the default facing.
+- The facing test suite names its orchestrator scrub sample neutrally.
+
 ## v2.5.3 - Reference facing controls and observed action returns
 
 - Reference edits can opt into `gen --facing right|left` to request orientation in the generation prompt. The default `preserve` leaves existing generation callers unchanged.

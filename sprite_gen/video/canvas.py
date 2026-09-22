@@ -48,21 +48,22 @@ class CanvasProfile:
     ratio: float  # width / height
     headroom: float  # fraction of the canvas height kept empty ABOVE the still (tall/wide)
     lead: float  # fraction of the canvas width kept empty IN FRONT of the subject (wide)
+    trail: float  # fraction of the canvas width kept empty BEHIND the subject (wide)
     why: str
 
 
 # The one table. Keys are state names as the sprite-request uses them; unknown
 # states fall through to `default`.
 STATE_CANVAS: dict[str, CanvasProfile] = {
-    "jump": CanvasProfile(SHAPE_TALL, 3 / 4, 0.34, 0.0, "airborne frames need head-room; hair clipped at 1:1"),
-    "attack": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.35, 0.28, "weapon swings rise overhead and extend in front"),
-    "projectile": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.34, "projectile travels away from the body"),
+    "jump": CanvasProfile(SHAPE_TALL, 3 / 4, 0.34, 0.0, 0.0, "airborne frames need head-room; hair clipped at 1:1"),
+    "attack": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.35, 0.28, 0.2, "weapon swings rise overhead and extend in front; a long weapon drawn back reaches behind"),
+    "projectile": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.34, 0.0, "projectile travels away from the body"),
     # Raised-limb celebrations leave a square frame at the top corners; wide with a
     # symmetric margin keeps them inside (lead applies in front, the rest pads the back).
-    "cheer": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.30, "arms raised and spread leave a 1:1 frame"),
-    "wave": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.30, "a raised waving arm leaves a 1:1 frame"),
-    "celebrate": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.30, "same envelope as cheer"),
-    "default": CanvasProfile(SHAPE_SQUARE, 1.0, 0.0, 0.0, "in-place motion fits the still's own frame"),
+    "cheer": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.30, 0.0, "arms raised and spread leave a 1:1 frame"),
+    "wave": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.30, 0.0, "a raised waving arm leaves a 1:1 frame"),
+    "celebrate": CanvasProfile(SHAPE_WIDE, 16 / 9, 0.0, 0.30, 0.0, "same envelope as cheer"),
+    "default": CanvasProfile(SHAPE_SQUARE, 1.0, 0.0, 0.0, 0.0, "in-place motion fits the still's own frame"),
 }
 SHAPE_DEFAULTS: dict[str, CanvasProfile] = {
     SHAPE_SQUARE: STATE_CANVAS["default"],
@@ -161,6 +162,7 @@ def pad_canvas(
     facing: str = "right",
     headroom: float | None = None,
     lead: float | None = None,
+    trail: float | None = None,
     key: str = "auto",
 ) -> tuple[Image.Image, dict[str, Any]]:
     """Return (padded RGB image, placement report). Never downsizes the still.
@@ -178,8 +180,9 @@ def pad_canvas(
     w, h = src.size
     head = profile.headroom if headroom is None else headroom
     front = profile.lead if lead is None else lead
-    if not 0 <= head < 0.9 or not 0 <= front < 0.9:
-        raise SystemExit("video-canvas: --headroom/--lead must be in [0, 0.9)")
+    back = profile.trail if trail is None else trail
+    if not 0 <= head < 0.9 or not 0 <= front < 0.9 or not 0 <= back < 0.9 or not front + back < 0.9:
+        raise SystemExit("video-canvas: --headroom/--lead/--trail must be in [0, 0.9) and lead + trail below 0.9")
     if profile.shape == SHAPE_SQUARE:
         side = max(w, h)
         canvas_w, canvas_h = side, side
@@ -190,12 +193,13 @@ def pad_canvas(
         canvas_h = max(h, round(h / (1 - head)), round(w / profile.ratio))
         canvas_w = max(w, round(canvas_h * profile.ratio))
         x, y = (canvas_w - w) // 2, canvas_h - h
-    else:  # wide: extra width goes in front of the facing direction; at least the profile ratio
+    else:  # wide: `trail` of the width stays empty behind the subject, the rest of the extra width goes in front; at least the profile ratio
         required_h = max(h, round(h / (1 - head)))
-        canvas_w = max(w, round(w / (1 - front)), round(required_h * profile.ratio))
+        canvas_w = max(w, round(w / (1 - front - back)), round(required_h * profile.ratio))
         canvas_h = max(h, round(canvas_w / profile.ratio))
         y = canvas_h - h
-        x = 0 if facing == "right" else canvas_w - w
+        behind = min(round(canvas_w * back), canvas_w - w)
+        x = behind if facing == "right" else canvas_w - w - behind
     canvas = Image.new("RGB", (canvas_w, canvas_h), fill)
     canvas.paste(src, (x, y))
     report = {
@@ -206,6 +210,7 @@ def pad_canvas(
         "offset": [x, y],
         "headroom": head,
         "lead": front,
+        "trail": back,
         "facing": facing,
         "key_rgb": list(fill),
         "corner_rgb": list(corner),
@@ -226,12 +231,13 @@ def run_canvas(
     lead: float | None,
     report_path: Path | None,
     key: str = "auto",
+    trail: float | None = None,
 ) -> dict[str, Any]:
     still = still.expanduser().resolve()
     if not still.is_file():
         raise SystemExit(f"video-canvas: still not found: {still}")
     profile = profile_for(state, shape)
-    canvas, report = pad_canvas(Image.open(still), profile, facing=facing, headroom=headroom, lead=lead, key=key)
+    canvas, report = pad_canvas(Image.open(still), profile, facing=facing, headroom=headroom, lead=lead, trail=trail, key=key)
     out = out.expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".part")
@@ -251,6 +257,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--facing", choices=("right", "left"), default="right", help="which way the subject faces (wide canvases add room in front)")
     parser.add_argument("--headroom", type=float, help="tall/wide: empty fraction of canvas height above the still (default from the profile)")
     parser.add_argument("--lead", type=float, help="wide: empty fraction in front of the subject (default from the profile)")
+    parser.add_argument("--trail", type=float, help="wide: empty fraction behind the subject, for a weapon drawn back (default from the profile)")
     parser.add_argument("--key", choices=KEYS, default="auto", help="chroma key of the still (auto reads the corners; green/magenta are normalized to the exact key; white pads with the corner colour)")
     parser.add_argument("--report", type=Path, help="write the canvas report JSON here")
 
@@ -259,7 +266,7 @@ def run(**kwargs: object) -> int:
     payload = run_canvas(
         Path(str(kwargs["still"])), Path(str(kwargs["out"])),
         state=kwargs.get("state"), shape=kwargs.get("shape"), facing=str(kwargs.get("facing") or "right"),  # type: ignore[arg-type]
-        headroom=kwargs.get("headroom"), lead=kwargs.get("lead"), report_path=kwargs.get("report"),  # type: ignore[arg-type]
+        headroom=kwargs.get("headroom"), lead=kwargs.get("lead"), trail=kwargs.get("trail"), report_path=kwargs.get("report"),  # type: ignore[arg-type]
         key=str(kwargs.get("key") or "auto"),
     )
     print(json.dumps(payload, ensure_ascii=False, indent=2))

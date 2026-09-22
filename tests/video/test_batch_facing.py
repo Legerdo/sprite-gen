@@ -46,11 +46,14 @@ def test_set_facing_reaches_both_real_canvas_and_prompt(tmp_path, offline, facin
         if not options:
             assert (tmp_path / "side.facing.png").read_bytes() == source_bytes
             assert result["items"][0]["facing"]["final_direction_source"] == "observation"
-        assert (canvas["offset"][0] > 0) == (facing == "left")
+        behind = round(canvas["canvas"][0] * canvas["trail"])
+        assert canvas["facing"] == facing
+        assert canvas["offset"][0] == (behind if facing == "right" else canvas["canvas"][0] - canvas["still"][0] - behind)
     else:
         assert "facing" not in result["items"][0]
         assert prompts[0] == batch.build_prompt(direction, "attack", None, facing="right")
-        assert canvas["offset"][0] == 0
+        assert canvas["facing"] == "right"
+        assert canvas["offset"][0] == round(canvas["canvas"][0] * canvas["trail"])
 
 
 def test_changed_facing_cannot_reuse_an_opposite_prompt_clip(tmp_path, offline, monkeypatch):
