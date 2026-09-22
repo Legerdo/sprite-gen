@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import math
+import pytest
 from pathlib import Path
 
 import numpy as np
@@ -72,17 +73,40 @@ def test_gait_guard_respects_a_period_at_or_above_the_floor(tmp_path: Path) -> N
     assert gait["half_period_guard"]["applied"] is False
 
 
-def test_gait_guard_does_not_double_when_the_double_repeats_much_worse() -> None:
+def test_gait_guard_refuses_a_lone_step_when_the_double_repeats_much_worse() -> None:
     # A distance matrix from a scalar signal: a 6-frame beat riding on a steady drift.
     # 6 repeats best; 12 repeats about twice as badly (twice the drift) — well outside
-    # GAIT_DOUBLE_TOL — so a gait floor of 10 must leave 6 alone and say why.
+    # GAIT_DOUBLE_TOL — so under a gait floor of 10 the clip holds one step only.
+    # Keeping 6 would loop half a stride without a word (a quadruped whose near and
+    # far legs read alike does exactly this); the selector refuses under the same
+    # words as a flat profile and says which double it weighed.
     n = 120
     f = np.array([math.sin(2 * math.pi * t / 6) + 0.05 * t for t in range(n)])
     D = np.abs(f[:, None] - f[None, :]).astype(np.float32)
-    c = loop_mod.detect_cycle(D, min_len=4, max_len=40, gait_floor=10)
-    g = c["half_period_guard"]
-    assert c["period_global"] == 6
-    assert g["applied"] is False and g["below_floor"] == 6 and "why" in g
+    with pytest.raises(SystemExit) as exc:
+        loop_mod.detect_cycle(D, min_len=4, max_len=40, gait_floor=10)
+    assert str(exc.value).startswith("video-loop: no periodic cycle found")
+    assert "one step (6 frames" in str(exc.value)
+    g = exc.value.diagnostics["half_period_guard"]
+    assert g["applied"] is False and g["below_floor"] == 6 and g["double_candidate"] in (11, 12, 13) and "why" in g
+
+
+def test_gait_guard_takes_the_full_gaits_own_minimum_near_twice_the_step() -> None:
+    # A stationary profile shaped like the cat clip: the one-step repeat dips at 12,
+    # the full stride's own minimum sits at 22 — not at 24, which is no minimum at
+    # all — and repeats about as well. Under a 14-frame floor the guard must look
+    # past 2p +- 1, find 22, and take it.
+    n = 96
+    g = np.full(n, 0.05, dtype=np.float32)
+    g[12] = 0.02
+    g[22] = 0.024
+    g[11] = g[13] = g[21] = g[23] = 0.045
+    D = np.abs(np.subtract.outer(np.arange(n), np.arange(n)))
+    D = g[D].astype(np.float32)
+    c = loop_mod.detect_cycle(D, min_len=12, max_len=36, gait_floor=14)
+    g2 = c["half_period_guard"]
+    assert g2["applied"] is True and g2["from"] == 12 and g2["to"] == 22
+    assert c["period_global"] == 22 and c["length"] in (21, 22, 23)
 
 
 def test_feet_anchor_declares_the_foot_pivot_for_the_spec_loader(tmp_path: Path) -> None:
