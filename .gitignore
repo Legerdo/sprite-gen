@@ -23,3 +23,7 @@ CLAUDE.md
 # local kuma tooling / wrangler cache (never track)
 .kuma/
 .wrangler/
+
+# build artifacts the release workflow produces
+/build/
+/dist/
