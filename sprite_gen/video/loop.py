@@ -69,7 +69,9 @@ ONE_SHOT_MIN_LEN = 4  # a one-shot's length is the clip's own fact; only a degen
 GAIT_DOUBLE_TOL = 0.25
 GAIT_DOUBLE_SEARCH = 3  # frames either side of 2x the step where the full gait's own minimum may sit
 GAIT_NEAR_EXACT_STEP_FRACTION = 0.10  # no ambiguity extension when repeat error is tiny compared with a playback step
-ANCHOR_MODES = ("none", "feet")
+ANCHOR_MODES = ("none", "feet", "body")
+BODY_ANCHOR_BAND = 0.6  # --anchor body reads the wrap offset from the top 60 % of the first frame's box: head and torso, not the legs
+BODY_ANCHOR_SEARCH = 24  # px either side searched for the last frame's horizontal offset against the first
 FOOT_BAND = 0.08  # fraction of the frame's own height, measured up from its lowest opaque row
 
 
@@ -499,6 +501,53 @@ def drift_reference(frames: list[Image.Image], boxes: list[tuple[int, int, int, 
     return [float(r) for r in ref], abs(slope * (len(frames) - 1)), float(np.ptp(feet - trend))
 
 
+def body_wrap_offset(frames: list[Image.Image], *, band: float = BODY_ANCHOR_BAND, search: int = BODY_ANCHOR_SEARCH) -> int:
+    """Horizontal offset (px) that best lays the LAST frame's head and torso over the FIRST's.
+
+    A gait clip drifts a few pixels over one cycle, and the last-to-first wrap shows that
+    drift as a sideways jump. The legs are mid-stride and the tail mid-swing at both ends,
+    so they cannot say where the body is; the top of the first frame's box (head, torso,
+    `band` of its height) can. Whole-pixel registration over that region, over a small
+    horizontal search, is the one measurement `--anchor body` makes — it is then spread
+    as a ramp across the cycle, never applied frame by frame (per-frame fitting turns a
+    head bob into a full-body shiver, measured 2026-09-22)."""
+    if len(frames) < 2:
+        return 0
+    first = np.asarray(frames[0], dtype=np.float32)
+    last = np.asarray(frames[-1], dtype=np.float32)
+    alpha = first[:, :, 3] >= 8
+    rows = np.where(alpha.any(axis=1))[0]
+    cols = np.where(alpha.any(axis=0))[0]
+    if len(rows) == 0 or len(cols) == 0:
+        return 0
+    top, bottom, left, right = rows[0], rows[-1], cols[0], cols[-1]
+    mask = np.zeros_like(alpha)
+    mask[top : top + max(1, int((bottom - top) * band)), left : right + 1] = True
+    ref = first[mask]
+
+    def cost(dx: int) -> float:
+        return float(np.abs(ref - np.roll(last, dx, axis=1)[mask]).mean())
+
+    return min(range(-search, search + 1), key=cost)
+
+
+def ramp_frames(frames: list[Image.Image], wrap_dx: int) -> list[Image.Image]:
+    """Shift frame k by round(wrap_dx * k / L) so the cycle's end returns to its start."""
+    L = len(frames)
+    if wrap_dx == 0 or L < 2:
+        return frames
+    out = []
+    for k, im in enumerate(frames):
+        dx = int(round(wrap_dx * k / L))
+        if dx == 0:
+            out.append(im)
+            continue
+        shifted = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        shifted.paste(im, (dx, 0))
+        out.append(shifted)
+    return out
+
+
 def build_strip(frames: list[Image.Image], *, max_cells: int = STRIP_MAX_CELLS, max_height: int = STRIP_MAX_HEIGHT, max_width: int = STRIP_MAX_WIDTH, cycle_seconds: float, body_height: int | None = None, anchor: str = "none", kind: str = "periodic") -> tuple[Image.Image, dict[str, Any]]:
     """Union-crop (no bottom pad so feet meet the floor), scale, bottom-align, tile horizontally.
 
@@ -685,8 +734,11 @@ def run_loop(
     length: int | None = None,
     strip_height: int = STRIP_MAX_HEIGHT,
     body_height: int | None = None,
-    anchor: str = "none",
+    anchor: str | None = None,
 ) -> dict[str, Any]:
+    if anchor is None:
+        # gaits drift a few pixels over a cycle and the wrap shows it; in-place states do not
+        anchor = "body" if profile_for(state).gait else "none"
     if anchor not in ANCHOR_MODES:
         raise SystemExit(f"video-loop: unknown --anchor {anchor!r}; expected one of {', '.join(ANCHOR_MODES)}")
     if cycle_mode not in CYCLE_MODES:
@@ -766,7 +818,20 @@ def run_loop(
         frames.append(im)
 
     cycle_seconds = L / fps
-    strip, strip_meta = build_strip(frames, max_height=strip_height, cycle_seconds=cycle_seconds, body_height=body_height, anchor=anchor, kind=str(cycle.get("kind") or "periodic"))
+    wrap_dx = 0
+    if anchor == "body":
+        wrap_dx = body_wrap_offset(frames)
+        frames = ramp_frames(frames, wrap_dx)
+        for k, im in enumerate(frames):
+            im.save(cycle_dir / f"frame-{k:03d}.png")
+    strip, strip_meta = build_strip(frames, max_height=strip_height, cycle_seconds=cycle_seconds, body_height=body_height, anchor="feet" if anchor == "feet" else "none", kind=str(cycle.get("kind") or "periodic"))
+    if anchor == "body":
+        strip_meta["foot_anchor"] = "body"
+        strip_meta["wrap_dx_px"] = wrap_dx
+        # the wrap as it now plays: last ramped frame -> first, against an ordinary step
+        Dr = distance_matrix(sorted(cycle_dir.glob("frame-*.png")))
+        inner = float(np.mean([Dr[k, k + 1] for k in range(len(frames) - 1)])) if len(frames) > 1 else 0.0
+        strip_meta["seam_ratio_after_anchor"] = round(float(Dr[len(frames) - 1, 0]) / inner, 4) if inner > 0 else None
     # The GIF/WebP are cut from the strip's cells. A cycle longer than the cell cap was
     # subsampled there, so asking for more frames than cells repeats cells back to back
     # and the GIF writer merges the identical neighbours — the file then holds fewer
@@ -853,7 +918,7 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--length", type=int, help="fixed cut: cycle length in frames (with --cycle fixed)")
     parser.add_argument("--strip-height", type=int, default=STRIP_MAX_HEIGHT, help=f"cell/strip/GIF height cap in px (default {STRIP_MAX_HEIGHT}); the cycle is scaled down to fit, and never up unless --body-height asks for it")
     parser.add_argument("--body-height", type=int, help="scale so the STANDING height (tallest floor-contact frame) is this many px — the same value across states gives the same character size; --strip-height stays the cap")
-    parser.add_argument("--anchor", choices=ANCHOR_MODES, default="none", help="feet: remove in-canvas drift (a straight-line trend) so every cell stands on the mean foot line; reports drift_px and foot_sway_px")
+    parser.add_argument("--anchor", choices=ANCHOR_MODES, default=None, help="body (default for walk/run): measure the last-to-first head-and-torso offset once and spread it as a ramp over the cycle; feet: remove in-canvas drift (a straight-line trend) so every cell stands on the mean foot line; none: leave placement as filmed (default for other states)")
     parser.add_argument("--name", default="loop", help="basename for strip/gif/webp outputs")
     parser.add_argument("--report", type=Path)
 
@@ -867,7 +932,7 @@ def run(**kwargs: object) -> int:
         cycle_mode=str(kwargs.get("cycle") or "auto"), gif_fps=float(kwargs.get("gif_fps") or GIF_FPS_DEFAULT),
         start=kwargs.get("start"), length=kwargs.get("length"), strip_height=int(kwargs.get("strip_height") or STRIP_MAX_HEIGHT),  # type: ignore[arg-type]
         body_height=kwargs.get("body_height"),  # type: ignore[arg-type]
-        anchor=str(kwargs.get("anchor") or "none"),
+        anchor=kwargs.get("anchor"),  # None resolves by state inside run_loop
     )
     summary = {k: payload[k] for k in ("state", "frames_total", "window", "cycle_seconds", "n_out", "delay_ms", "resampled_seam_ratio", "specks_dropped", "report")}
     summary["cycle"] = {k: payload["cycle"].get(k) for k in ("kind", "start", "length", "period_global", "ratio", "review_recommended", "half_period_guard")}
