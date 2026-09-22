@@ -38,6 +38,8 @@ DEFAULT_BRANCH = "main"
 ASSET_REF = re.compile(r"(?P<prefix>docs/assets/)?(?P<name>[\w.-]+\.gif)")
 # The same path where it is actually a link target: `](path)`, `src="path"`, `href='path'`.
 LINK_TARGET = re.compile(r"""(?P<pre>\]\(|(?:src|href)=["'])(?P<path>docs/assets/[\w.-]+\.gif)""")
+# A code fence, either spelling. Only the character that opened one can close it.
+FENCE = re.compile(r"^(?P<marker>`{3,}|~{3,})")
 
 
 class ReleaseNotesError(RuntimeError):
@@ -52,18 +54,31 @@ def version_of(tag: str) -> str:
 
 
 def _heading_pattern(version: str) -> re.Pattern[str]:
-    # `(?![\w.])` so v2.5.3 does not match the v2.5.30 heading sitting above it.
-    return re.compile(rf"^##\s+v{re.escape(version)}(?![\w.])")
+    # `(?![\w.-])` so v2.5.3 matches neither the v2.5.30 heading sitting above it nor a
+    # v2.5.3-rc1 pre-release section: `version_of` accepts a `-` suffix as a tag, so the
+    # heading guard has to refuse one too, or the rc notes become the release page.
+    return re.compile(rf"^##\s+v{re.escape(version)}(?![\w.-])")
 
 
 def _heading_lines(lines: list[str]) -> list[int]:
-    """Indices of real `## ` headings: a `## …` inside a fenced block is code, not a section."""
-    fenced = False
+    """Indices of real `## ` headings: a `## …` inside a fenced block is code, not a section.
+
+    Markdown fences both ways, and a block is closed only by the character that opened it:
+    a ``` line inside a `~~~` block is the block's content. Reading one spelling as a fence
+    and the other as prose would keep the rule for quoted shell and drop it for quoted
+    markdown — which is the CHANGELOG entry most likely to contain a `## vX.Y.Z` line.
+    """
+    fence: str | None = None
     found: list[int] = []
     for i, line in enumerate(lines):
-        if line.startswith("```"):
-            fenced = not fenced
-        elif not fenced and line.startswith("## "):
+        opened = FENCE.match(line)
+        if opened:
+            marker = opened.group("marker")[0]
+            if fence is None:
+                fence = marker
+            elif marker == fence:
+                fence = None
+        elif fence is None and line.startswith("## "):
             found.append(i)
     return found
 
@@ -79,7 +94,7 @@ def extract_section(changelog: str, version: str) -> tuple[str, str]:
     headings = _heading_lines(lines)
     start = next((i for i in headings if pattern.match(lines[i])), None)
     if start is None:
-        known = [m.group(1) for m in (re.match(r"##\s+(v[\w.]+)", lines[i]) for i in headings) if m]
+        known = [m.group(1) for m in (re.match(r"##\s+(v[\w.-]+)", lines[i]) for i in headings) if m]
         raise ReleaseNotesError(
             f"CHANGELOG.md has no `## v{version}` section. "
             f"Newest sections: {', '.join(known[:5]) or '(none)'}"

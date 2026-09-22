@@ -92,6 +92,15 @@ def test_a_version_is_not_matched_by_a_longer_one(tmp_path: Path) -> None:
         _render(tmp_path, "v1.3.0", longer)
 
 
+def test_a_version_is_not_matched_by_a_pre_release_of_itself(tmp_path: Path) -> None:
+    """`## v1.3.0-rc1` must not answer for tag v1.3.0 — a tag may carry a `-` suffix too."""
+    rc = "# Changelog\n\n## v1.3.0-rc1 - Release candidate\n\n- Not the release's notes.\n"
+    with pytest.raises(release_notes.ReleaseNotesError) as err:
+        _render(tmp_path, "v1.3.0", rc)
+    assert "v1.3.0-rc1" in str(err.value), "name the section that was refused, suffix included"
+    page = _render(tmp_path, "v1.3.0-rc1", rc, with_footer=False)
+    assert page["title"] == "v1.3.0-rc1 - Release candidate", "the rc tag still gets its own section"
+
 
 def test_a_heading_inside_a_fenced_block_is_code_not_a_section(tmp_path: Path) -> None:
     """A `## v1.2.0` line inside a code fence must not cut the section short or answer for a tag."""
@@ -106,6 +115,22 @@ def test_a_heading_inside_a_fenced_block_is_code_not_a_section(tmp_path: Path) -
     assert "A line after the fence." in str(newest["body"])
     middle = _render(tmp_path, "v1.2.0", fenced, with_footer=False)
     assert middle["body"] == "- The real middle section."
+
+
+def test_a_tilde_fence_hides_a_heading_the_way_a_backtick_fence_does(tmp_path: Path) -> None:
+    """Quoted markdown uses `~~~` so its own backticks stay readable; it is still a fence."""
+    fenced = (
+        "# Changelog\n\n## v1.3.0 - Newest\n\n"
+        "- The section this release's notes are quoting:\n\n"
+        "~~~md\n## v1.2.0 - not a heading\n~~~\n\n"
+        "- A line after the fence.\n\n"
+        "## v1.2.0 - Middle\n\n- The real middle section.\n"
+    )
+    newest = _render(tmp_path, "v1.3.0", fenced, with_footer=False)
+    assert "A line after the fence." in str(newest["body"])
+    middle = _render(tmp_path, "v1.2.0", fenced, with_footer=False)
+    assert middle["body"] == "- The real middle section."
+
 
 def test_a_tag_that_is_not_a_release_tag_is_refused(tmp_path: Path) -> None:
     for tag in ("main", "1.3.0", "release-1.3.0"):
